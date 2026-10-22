@@ -23,7 +23,7 @@ globalThis.window=new EventTarget();
 globalThis.document={
   getElementById:()=>null,
   createElement:()=>({
-    shadowRoot:null,classList:{contains:()=>false,toggle(){}},
+    shadowRoot:null,dataset:{},classList:{contains:()=>false,toggle(){}},
     attachShadow(){this.shadowRoot=shadow();return this.shadowRoot},
     remove(){}
   }),

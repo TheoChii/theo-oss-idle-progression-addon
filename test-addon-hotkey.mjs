@@ -22,7 +22,7 @@ const fakeShadow = () => ({
 globalThis.document = {
   getElementById(id){return addons.find(a=>a.id===id)||null;},
   createElement(){return {
-    id:'',shadowRoot:null,
+    id:'',shadowRoot:null,dataset:{},
     classList:{
       flags:new Set(),
       add(name){this.flags.add(name);},

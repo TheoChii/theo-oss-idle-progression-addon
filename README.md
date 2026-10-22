@@ -1,8 +1,15 @@
 # Theo's oss!idle Progression Toolkit ⚡
 
-An unofficial, experimental in-game progression calculator add-on for [oss!idle](https://github.com/oss-idle/oss-idle).
+An unofficial, experimental in-game progression toolkit add-on for [oss!idle](https://github.com/oss-idle/oss-idle).
 
 **Vibe-coded by Theo with AI assistance.** This project was developed using AI-generated and AI-assisted code, with review and automated tests. Its estimates are not official game guidance.
+
+## Two main sections
+
+- **Calculators:** Skill Improvement, Overdrive, Prestige, Rebirth, and Farming.
+- **Discovery:** filter downloaded osu!mania beatmaps to find difficulties with no local score for the selected character. Includes search, key count, max stars, sort order, play count, and a link to the corresponding osu! beatmap page.
+
+Discovery uses oss!idle's read-only local SQL database bridge and the downloaded beatmap IndexedDB metadata, as documented in the [official add-on SDK](https://github.com/oss-idle/addon-sdk/blob/master/packages/addon-sdk/README.md). It does **not** contact a live ranked-map catalog, and “no local play found” does not prove the character has never played a chart on another device or before clearing data. Characters are suggested from the latest locally stored score, with a manual selector if that guess is wrong. Select **Refresh** after starting the client or finishing a play.
 
 ## Features
 
@@ -17,7 +24,7 @@ An unofficial, experimental in-game progression calculator add-on for [oss!idle]
 ## Install in oss!idle
 
 1. Open **Options → Add-ons → Manage** and create an add-on draft.
-2. Paste the full contents of `progression-toolkit.addon.js` into the game's **Code** editor (version **0.3.2**).
+2. Paste the full contents of `progression-toolkit.addon.js` into the game's **Code** editor (version **0.4.0**).
 3. Save the draft, then **Install** and **Enable** it.
 4. With the game window focused, press **Ctrl+Shift+P** to open or close the toolkit. Press **Esc** to close it.
 
@@ -25,8 +32,8 @@ An unofficial, experimental in-game progression calculator add-on for [oss!idle]
 
 ## Safety and limitations
 
-- The add-on is **read-only**: it doesn't change character progression or perform gameplay actions.
-- Calculations use locally entered values; the add-on does not fetch account data or send it over a network.
+- The add-on is **read-only**: it doesn't change character progression or perform gameplay actions. Map links open osu! in a separate browser tab only when clicked.
+- Calculators use locally entered numbers. Discovery reads only the game's locally stored character names, score history and downloaded chart metadata to build its lists. No account data is transmitted by the add-on.
 - Skill comparisons show modeled gameplay parameters, **not guaranteed score, accuracy, or clear-rate improvements**.
 - Game mechanics change over time. Check formulas against the current game before relying on a result.
 - Third-party add-ons run in the game page context; review any source before enabling it.
@@ -42,6 +49,7 @@ node --check progression-toolkit.addon.js
 node test-addon-hotkey.mjs
 node test-skill-improvement.mjs
 node test-overdrive-layout.mjs
+node test-map-discovery.mjs
 ```
 
 Formula references: the official game's [upgrades](https://github.com/oss-idle/oss-idle/blob/main/packages/shared/src/upgrades.ts), [skill-level mapping](https://github.com/oss-idle/oss-idle/blob/main/packages/shared/src/sim/skills/levelCurve.ts), [skill simulations](https://github.com/oss-idle/oss-idle/tree/main/packages/shared/src/sim/skills), and [XP model](https://github.com/oss-idle/oss-idle/blob/main/packages/shared/src/sim/skills/xp.ts).

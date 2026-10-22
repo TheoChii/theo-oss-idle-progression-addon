@@ -1,8 +1,8 @@
-/* Theo's oss!idle Progression Toolkit v0.3.2 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.0 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,affected:10000,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed'};
-let data={...A},root=null,tab='Improvement',hotkeyHandler=null;
+let data={...A},root=null,tab='Improvement',section='Calculators',hotkeyHandler=null;
 const val=k=>Math.max(0,+data[k]||0),fmt=(v,d=2)=>Number.isFinite(v)?v.toLocaleString('en-US',{maximumFractionDigits:d}):'—';
 function cb(x0,y0,x1,y1){let ax=1-(x1=3*(x1-x0)-(x0*=3))-x0,ay=1-(y1=3*(y1-y0)-(y0*=3))-y0;return t=>{if(t<=0)return 0;if(t>=1)return 1;let r=t,s=0,d=1,x;for(let i=0;i<32;i++){x=r*(r*(r*ax+x1)+x0)-t;if(Math.abs(x)<1e-5)break;let dv=r*(r*ax*3+x1*2)+x0;if(Math.abs(dv)<1e-5)break;r-=x/dv;}if(r<0||r>1){r=t;for(let i=0;i<60;i++){x=r*(r*(r*ax+x1)+x0);if(Math.abs(x-t)<1e-5)break;if(t>x)s=r;else d=r;r=(d+s)/2;}}return r*(r*(r*ay+y1)+y0);};}
 const early=cb(.1,.4,.95,0),late=cb(.5,0,1,.4),mind=cb(.6,0,.6,1);
@@ -106,11 +106,124 @@ function skillMetrics(id,l){
  }
 }
 
+/* Map Discovery: read-only access to oss!idle's supported game bridges.
+ * Based on oss-idle/addon-sdk bridge/db.ts, bridge/character.ts, bridge/beatmaps.ts.
+ * Never update the game DB, game indexes or IndexedDB version. */
+const mapState={status:'idle',error:'',sets:[],characters:[],characterId:null,suggestedId:null,
+  played:new Map(),query:'',sort:'stars',keys:'all',limit:'all',unplayed:true};
+let mapRequest=0;
+const safeText=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const resultRows=res=>{const x=res?.[0];return x?x.values.map(row=>Object.fromEntries(x.columns.map((k,i)=>[k,row[i]]))):[]};
+const gameRead=(sql,params=[])=>{
+  if(!window.db?.read)throw new Error('Game score database is not ready. Open Song Select, then refresh.');
+  return window.db.read(db=>resultRows(db.exec(sql,params)));
+};
+function readDownloadedSets(){
+  if(typeof indexedDB==='undefined')return Promise.reject(new Error('Beatmap storage is not available.'));
+  return new Promise((resolve,reject)=>{
+    // As in the official SDK, omit the version to avoid upgrading the game's library.
+    const req=indexedDB.open('beatmaps');
+    req.onerror=()=>reject(req.error||new Error('Cannot open downloaded beatmaps.'));
+    req.onblocked=()=>reject(new Error('Beatmap library is blocked by another game window.'));
+    req.onsuccess=()=>{
+      const db=req.result;
+      if(!db.objectStoreNames.contains('meta')){db.close();reject(new Error('No downloaded beatmap metadata available.'));return;}
+      try{
+        const tx=db.transaction('meta','readonly'),get=tx.objectStore('meta').getAll();
+        get.onsuccess=()=>resolve((get.result||[]).filter(s=>s&&Array.isArray(s.versions)));
+        get.onerror=()=>reject(get.error||new Error('Cannot read downloaded maps.'));
+        tx.oncomplete=()=>db.close();
+        tx.onerror=()=>{db.close();reject(tx.error||new Error('Cannot read downloaded maps.'));};
+        tx.onabort=()=>db.close();
+      }catch(e){db.close();reject(e);}
+    };
+  });
+}
+async function loadMapDiscovery(){
+ const id=++mapRequest;
+ mapState.status='loading';mapState.error='';renderDiscovery();
+ try{
+  const [sets,characters,latest]=await Promise.all([
+    readDownloadedSets(),
+    gameRead('SELECT id, name, local, current, overallTotalXp FROM character ORDER BY local ASC, current DESC, overallTotalXp DESC'),
+    gameRead('SELECT characterId FROM score ORDER BY playedAt DESC LIMIT 1')
+  ]);
+  if(!root||id!==mapRequest)return;
+  const suggested=characters.find(c=>Number(c.id)===Number(latest[0]?.characterId))
+    ||characters.find(c=>Number(c.local)===0)||characters.find(c=>Number(c.current)===1)||characters[0];
+  const picked=characters.find(c=>Number(c.id)===Number(mapState.characterId))||suggested;
+  if(!picked)throw new Error('No character was found in your local game database.');
+  const played=await gameRead('SELECT beatmapId, COUNT(*) AS plays FROM score WHERE characterId = ? GROUP BY beatmapId',[Number(picked.id)]);
+  if(!root||id!==mapRequest)return;
+  mapState.sets=sets;mapState.characters=characters;mapState.characterId=Number(picked.id);
+  mapState.suggestedId=Number(suggested?.id);
+  mapState.played=new Map(played.map(x=>[Number(x.beatmapId),Number(x.plays)]));
+  mapState.status='ready';
+ }catch(e){
+  if(!root||id!==mapRequest)return;
+  mapState.status='error';mapState.error=e?.message||String(e);
+ }
+ renderDiscovery();
+}
+const mapSelect=(key,values,selected)=>'<label>'+key+'<select data-map-filter="'+values.name+'">'+values.items.map(([v,desc])=>'<option value="'+safeText(v)+'"'+(String(v)===String(selected)?' selected':'')+'>'+safeText(desc)+'</option>').join('')+'</select></label>';
+const mapMatches=()=>mapState.sets.flatMap(set=>set.versions.map(v=>({
+  setId:Number(set.id),id:Number(v.id),title:String(set.title||'Unknown title'),
+  artist:String(set.artist||'Unknown artist'),difficulty:String(v.version||'Unnamed'),
+  stars:Number(v.difficulty),keys:Number(v.keys),objects:Number(v.objects),
+  mode:Number(v.mode),plays:mapState.played.get(Number(v.id))||0
+}))).filter(x=>x.mode===3&&Number.isInteger(x.id)&&x.id>0&&Number.isFinite(x.stars)&&x.stars>=0&&Number.isFinite(x.objects))
+  .filter(x=>(!mapState.unplayed||!x.plays)
+    &&(mapState.keys==='all'||x.keys===Number(mapState.keys))
+    &&(mapState.limit==='all'||x.stars<=Number(mapState.limit))
+    &&(!mapState.query||(x.title+' '+x.artist+' '+x.difficulty+' '+x.id).toLowerCase().includes(mapState.query.toLowerCase())))
+  .sort((a,b)=>mapState.sort==='notes'?a.objects-b.objects||a.stars-b.stars:
+    mapState.sort==='title'?a.title.localeCompare(b.title)||a.stars-b.stars:
+    mapState.sort==='hardest'?b.stars-a.stars:a.stars-b.stars||a.title.localeCompare(b.title));
+function renderMapResults(){
+ const target=root?.shadowRoot.querySelector('#map-results');
+ if(!target||mapState.status!=='ready')return;
+ const found=mapMatches(),visible=found.slice(0,80);
+ const uniqueAll=mapState.sets.flatMap(x=>x.versions||[]).filter(x=>Number(x.mode)===3).length;
+ target.innerHTML=grid([
+  row('Downloaded mania charts',fmt(uniqueAll,0),'Stored in this browser'),
+  row(mapState.unplayed?'No local play found':'Matching charts',fmt(found.length,0),'For selected character and filters')
+ ])+(found.length?tbl(['Map / Difficulty','Stars','Keys','Notes','Local plays','Link'],visible.map(x=>[
+  '<b>'+safeText(x.title)+'</b><small>'+safeText(x.artist)+' • '+safeText(x.difficulty)+'</small>',
+  fmt(x.stars,2)+'★',x.keys+'K',fmt(x.objects,0),fmt(x.plays,0),
+  '<a class="map-link" href="https://osu.ppy.sh/beatmaps/'+x.id+'" target="_blank" rel="noopener noreferrer">View ↗</a>'
+ ])):'<p>No downloaded maps matched these filters. Try a higher star limit or disable the unplayed filter.</p>')
+ +(found.length>visible.length?'<p class="fine">Showing first '+visible.length+' of '+found.length+' matches. Refine the search to see more.</p>':'');
+}
+function renderDiscovery(){
+ if(!root||section!=='Discovery')return;
+ let c='<p>Explore downloaded osu!mania charts and find maps without a score in your <b>local play history</b>. This is a read-only lookup, not the live ranked catalog.</p>';
+ if(mapState.status==='loading')c+='<p>Reading local beatmaps and scores…</p>';
+ else if(mapState.status==='error')c+='<p class="notice">'+safeText(mapState.error)+'</p>';
+ else if(mapState.status==='idle')c+='<p>Select Refresh to load your downloaded maps.</p>';
+ if(mapState.status==='ready'){
+  const char=mapState.characters.find(x=>Number(x.id)===mapState.characterId);
+  c+=grid([
+   mapSelect('Character',{name:'character',items:mapState.characters.map(x=>[x.id,x.name+' ('+(Number(x.local)?'local':'account')+')'])},mapState.characterId),
+   mapSelect('Keys',{name:'keys',items:[['all','All key modes'],['4','4 keys'],['7','7 keys']]},mapState.keys),
+   mapSelect('Max stars',{name:'limit',items:[['all','All difficulties'],['2','Up to 2★'],['3','Up to 3★'],['4','Up to 4★'],['5','Up to 5★'],['6','Up to 6★']]},mapState.limit),
+   mapSelect('Sort by',{name:'sort',items:[['stars','Easiest first'],['hardest','Hardest first'],['notes','Fewest notes'],['title','Title A–Z']]},mapState.sort)
+  ]);
+  c+='<label>Find song, artist, difficulty or map ID<input data-map-filter="query" type="search" placeholder="Search downloaded maps…" value="'+safeText(mapState.query)+'"></label>';
+  c+='<label class="checkline"><input type="checkbox" data-map-filter="unplayed"'+(mapState.unplayed?' checked':'')+'> Only charts with no local play found</label>';
+  c+='<p class="fine">Checking <b>'+safeText(char?.name||'unknown')+'</b>. This character is '+(mapState.characterId===mapState.suggestedId?'suggested from the latest stored score (or account/guest fallback)':'selected by you')+'. Local score history can be incomplete after reinstalling, clearing data, or switching devices. An unplayed result is not a guarantee of never playing it online. Ranked status is not verified live.</p>';
+  c+='<div id="map-results"></div>';
+ }
+ c+='<p><button class="action-button" data-action="refresh-maps">'+(mapState.status==='loading'?'Loading…':'↻ Refresh downloaded maps and scores')+'</button></p>';
+ root.shadowRoot.querySelector('#contents').innerHTML=c;
+ renderMapResults();
+}
+
 const row=(label,value,detail='')=>'<div class="metric"><small>'+label+'</small><b>'+value+'</b><small>'+detail+'</small></div>';
 const field=(k,label)=>'<label>'+label+'<input type="number" data-key="'+k+'" step="any" min="0" value="'+data[k]+'"></label>';
 const grid=items=>'<div class="grid">'+items.join('')+'</div>';
 const tbl=(names,rows)=>'<div class="scroll"><table><thead><tr>'+names.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
 function render(){
+ if(section==='Discovery'){renderDiscovery();return;}
  let c='',u=Math.floor(val('upgrades')),p=Math.floor(val('prestige')),s=val('overdrive'),l=val('level'),xpRate=Math.max(1,val('xpPlay'));
  if(tab==='Improvement'){
  const current=val('improveCurrent'),target=val('improveTarget'),prestige=Math.floor(val('improvePrestige'));
@@ -170,11 +283,38 @@ function render(){
 export function mount(){
  if(root)return;document.getElementById('theo-oss-idle-toolkit')?.remove();try{data={...data,...JSON.parse(localStorage.getItem(K)||'{}')};}catch{}
  root=document.createElement('div');root.id='theo-oss-idle-toolkit';root.attachShadow({mode:'open'});
- const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a}:host nav button{flex:1;min-width:0;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}';
- root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><nav>'+['Improvement','Overdrive','Prestige','Rebirth','Farming'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
- root.shadowRoot.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.classList.contains('close'))root.classList.remove('open');if(b.dataset.tab){tab=b.dataset.tab;root.shadowRoot.querySelectorAll('nav button').forEach(n=>n.classList.toggle('active',n.dataset.tab===tab));render();}e.stopPropagation();});
- root.shadowRoot.addEventListener('change',e=>{const k=e.target.dataset.key;if(k){data[k]=k==='improveSkill'?e.target.value:+e.target.value;try{localStorage.setItem(K,JSON.stringify(data));}catch{}render();}e.stopPropagation();});
- root.shadowRoot.addEventListener('keydown',e=>e.stopPropagation());root.shadowRoot.addEventListener('keyup',e=>e.stopPropagation());document.body.appendChild(root);root.shadowRoot.querySelector('[data-tab="Improvement"]').classList.add('active');render();
+ const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:0;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}';
+ root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
+ root.shadowRoot.addEventListener('click',e=>{
+ const b=e.target.closest('button');if(!b)return;
+ if(b.classList.contains('close'))root.classList.remove('open');
+ if(b.dataset.section){
+  section=b.dataset.section;root.dataset.section=section.toLowerCase();
+  root.shadowRoot.querySelectorAll('.sections button').forEach(n=>n.classList.toggle('active',n.dataset.section===section));
+  render();if(section==='Discovery'&&mapState.status==='idle')void loadMapDiscovery();
+ }
+ if(b.dataset.tab){section='Calculators';tab=b.dataset.tab;root.dataset.section='calculators';
+  root.shadowRoot.querySelectorAll('.tools button').forEach(n=>n.classList.toggle('active',n.dataset.tab===tab));render();}
+ if(b.dataset.action==='refresh-maps'&&mapState.status!=='loading')void loadMapDiscovery();
+ e.stopPropagation();
+});
+ root.shadowRoot.addEventListener('change',e=>{
+ const m=e.target.dataset.mapFilter;
+ if(m&&mapState.status==='ready'){
+  if(m==='character'){mapState.characterId=Number(e.target.value);void loadMapDiscovery();}
+  else{mapState[m]=m==='unplayed'?Boolean(e.target.checked):e.target.value;renderDiscovery();}
+ }else{const k=e.target.dataset.key;
+  if(k){data[k]=k==='improveSkill'?e.target.value:+e.target.value;try{localStorage.setItem(K,JSON.stringify(data));}catch{}render();}
+ }
+ e.stopPropagation();
+});
+root.shadowRoot.addEventListener('input',e=>{
+ if(e.target.dataset.mapFilter==='query'&&mapState.status==='ready'){
+  mapState.query=e.target.value;renderMapResults();
+ }
+ e.stopPropagation();
+});
+ root.shadowRoot.addEventListener('keydown',e=>e.stopPropagation());root.shadowRoot.addEventListener('keyup',e=>e.stopPropagation());root.dataset.section=section.toLowerCase();document.body.appendChild(root);root.shadowRoot.querySelector('[data-tab="Improvement"]').classList.add('active');render();
  // Capture before the game's own key listeners; only block the exact shortcut.
  hotkeyHandler=e=>{
    const toggle=e.ctrlKey&&e.shiftKey&&!e.altKey&&!e.metaKey&&(e.code==='KeyP'||(e.key||'').toLowerCase()==='p');
@@ -185,10 +325,10 @@ export function mount(){
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.3.2. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.0. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
- hotkeyHandler=null;
+ hotkeyHandler=null;mapRequest++;section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
  root?.remove();root=null;
 }
