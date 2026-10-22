@@ -7,7 +7,7 @@ An unofficial, experimental in-game progression calculator add-on for [oss!idle]
 ## Features
 
 - **Skill Improvement:** compare real XP levels and prestige bonuses across all 11 skills using internal scaling and skill formulas.
-- **Overdrive (σ):** preview delayed upgrade purchases and XP multipliers.
+- **Overdrive (σ):** preview delayed upgrade purchases and XP multipliers. The summary shows plays until unlock, σ from buying now, or the next prestige slot when maxed.
 - **Prestige:** see reset effects, permanent bonuses, and the next prestige requirement.
 - **Rebirth:** estimate progress toward Overall Lv110.
 - **Farming:** estimate experience rates and the Mindblock penalty.
@@ -17,7 +17,7 @@ An unofficial, experimental in-game progression calculator add-on for [oss!idle]
 ## Install in oss!idle
 
 1. Open **Options → Add-ons → Manage** and create an add-on draft.
-2. Paste the full contents of `progression-toolkit.addon.js` into the game's **Code** editor (version **0.3.1**).
+2. Paste the full contents of `progression-toolkit.addon.js` into the game's **Code** editor (version **0.3.2**).
 3. Save the draft, then **Install** and **Enable** it.
 4. With the game window focused, press **Ctrl+Shift+P** to open or close the toolkit. Press **Esc** to close it.
 
@@ -41,6 +41,7 @@ Run the tests using Node.js:
 node --check progression-toolkit.addon.js
 node test-addon-hotkey.mjs
 node test-skill-improvement.mjs
+node test-overdrive-layout.mjs
 ```
 
 Formula references: the official game's [upgrades](https://github.com/oss-idle/oss-idle/blob/main/packages/shared/src/upgrades.ts), [skill-level mapping](https://github.com/oss-idle/oss-idle/blob/main/packages/shared/src/sim/skills/levelCurve.ts), [skill simulations](https://github.com/oss-idle/oss-idle/tree/main/packages/shared/src/sim/skills), and [XP model](https://github.com/oss-idle/oss-idle/blob/main/packages/shared/src/sim/skills/xp.ts).

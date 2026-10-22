@@ -1,4 +1,4 @@
-/* Theo's oss!idle Progression Toolkit v0.3.1 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.3.2 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,affected:10000,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed'};
@@ -134,7 +134,18 @@ function render(){
  }else if(tab==='Overdrive'){
  c='<p>Preview an upgrade at any level. Current defaults match your Speed build.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige count'),field('buyAt','Plan to buy at XP level'),field('xpPlay','XP earned per play')]);
  let req=minLevel(u),earliest=Math.max(l,req),choose=Math.max(earliest,val('buyAt')),q=preview(choose,u,s,p);
- c+=grid([row('Current multiplier',fmt(boost(u,s,p))+'×',fmt(s)+'σ'),row('Next upgrade',u>=10+p?'MAXED':'Lv'+req,u+'/'+(10+p)+' slots'),row(l>=req?'Eligible now':'XP to unlock',l>=req?'YES · purchase available':fmt(Math.max(0,xpAt(req)-xpAt(l)),0),l>=req?'You passed the Lv'+req+' requirement':fmt(Math.ceil(Math.max(0,xpAt(req)-xpAt(l))/xpRate),0)+' plays')]);
+ // Keep the Overdrive status grid at four cards in every state: locked, eligible and maxed.
+ const maxed=u>=10+p,eligible=!maxed&&l>=req,remaining=maxed?0:Math.max(0,xpAt(req)-xpAt(l)),now=eligible?preview(l,u,s,p):null;
+ c+=grid([
+   row('Current multiplier',fmt(boost(u,s,p))+'×',fmt(s)+'σ stored'),
+   row('Next upgrade',maxed?'MAXED':'Lv'+req,u+'/'+(10+p)+' slots'),
+   row(maxed?'Upgrade slots':eligible?'Upgrade unlocked':'XP to unlock',
+       maxed?'All filled':eligible?'READY':fmt(remaining,0),
+       maxed?'Prestige for more slots':eligible?'Requirement met at Lv'+req:'Available at Lv'+req),
+   row(maxed?'Next extra slot':eligible?'Overdrive if bought now':'Plays to unlock',
+       maxed?'Prestige '+(p+1):eligible?'+'+fmt(now?.add??0)+'σ':fmt(Math.ceil(remaining/xpRate),0),
+       maxed?'One extra slot per prestige':eligible?'At your current level':'At '+fmt(xpRate,0)+' XP/play')
+ ]);
  if(u===0)c+='<p class="fine">With 0 upgrades, your stored σ does not add XP by itself. Buying your first upgrade activates the upgrade bonus. Since your level is '+fmt(l)+', comparison rows begin at your current level rather than Lv'+req+'.</p>';
  if(q)c+=grid([row('Overdrive gained','+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ total'),row('Multiplier after',fmt(q.newBoost)+'×','from '+fmt(boost(u,s,p))+'×'),row('Skill level after',fmt(q.after),'Spends '+fmt(q.cost,0)+' XP'),row('XP to planned purchase',fmt(Math.max(0,xpAt(choose)-xpAt(l)),0),fmt(Math.ceil(Math.max(0,xpAt(choose)-xpAt(l))/xpRate),0)+' plays')]);
  const candidates=[earliest,earliest+.1,earliest+.25,earliest+.5,earliest+1,earliest+2,choose],unique=[...new Set(candidates.map(n=>+n.toFixed(4)))].sort((a,b)=>a-b);
@@ -174,7 +185,7 @@ export function mount(){
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.3.1. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.3.2. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
