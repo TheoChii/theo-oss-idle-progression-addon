@@ -1,4 +1,4 @@
-/* Theo's oss!idle Progression Toolkit v0.4.5 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.6 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,staminaUpgrades:0,warmMapMinutes:4,warmPhysicalShare:40,warmGapMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
@@ -14,14 +14,14 @@ function levelFromTotal(total){const t=Math.max(0,Number(total)||0);let l=0;whil
 const sigma=n=>Math.max(1,Math.min(n,2.5*Math.pow(n,Math.log10(2))));
 /** Medal bonuses compound per owned medal, in a separate XP multiplier pool. */
 const MEDAL_RATES={bronze:.0025,silver:.005,gold:.01,platinum:.02,divine:.03};
-/* Medal IDs/tier groups mirrored from official achievements/catalogue.ts, 2026-10-24.
+/* Medal IDs/tier groups mirrored from official achievements/catalogue.ts, 2026-10-24 (148 medal IDs).
  * Unknown future IDs are ignored, and reported rather than misclassified. */
 const MEDAL_IDS_BY_TIER={
- bronze: ["plays-100","hits-100k","time-10h","overall-25","upgrades-1","top-75","play-pp-50","play-pp-100","curator-1","pass-1","pass-2","fc-1","fc-2"],
- silver: ["grade-ss","plays-1k","hits-1m","time-100h","overall-50","upgrades-10","ladders-1","overdrive-2","prestige-1","first-1","pp-1k","top-50","play-pp-200","curator-5","combo-727","same-map-100","fail-99","night-owl","first-chat","possessed","pass-3","pass-4","fc-3","fc-4","speed-50","stamina-50","jackspeed-50","accuracy-50","reading-50","release-50","coordination-50","consistency-50","concentration-50","speedjam-50","memory-50"],
- gold: ["grade-x","rice","ln","plays-5k","hits-10m","time-1000h","overall-75","overall-100","upgrades-50","ladders-5","overdrive-10","prestige-5","first-10","pp-5k","top-25","play-pp-500","curator-25","pass-5","pass-6","fc-5","fc-6","speed-100","stamina-100","jackspeed-100","accuracy-100","reading-100","release-100","coordination-100","consistency-100","concentration-100","speedjam-100","memory-100"],
- platinum: ["plays-25k","hits-50m","time-10000h","overall-105","upgrades-100","ladders-10","overdrive-100","prestige-25","first-100","pp-10k","top-10","play-pp-750","curator-100","pass-7","pass-8","fc-7","fc-8","speed-105","stamina-105","jackspeed-105","accuracy-105","reading-105","release-105","coordination-105","consistency-105","concentration-105","speedjam-105","memory-105"],
- divine: ["grade-xx","plays-100k","hits-1b","overall-110","ladders-11","overdrive-1000","prestige-100","rebirth","first-1000","pp-20k","top-1","play-pp-1k","pass-9","pass-10","fc-9","fc-10","speed-110","stamina-110","jackspeed-110","accuracy-110","reading-110","release-110","coordination-110","consistency-110","concentration-110","speedjam-110","memory-110"],
+ bronze: ["plays-100","hits-100k","time-10h","overall-25","upgrades-1","top-75","play-pp-50","play-pp-100","curator-1","pass-1","pass-2","fc-1","fc-2","friends-1","mapper-1","mapper-2"],
+ silver: ["grade-ss","plays-1k","hits-1m","time-100h","overall-50","upgrades-10","ladders-1","overdrive-2","prestige-1","first-1","pp-1k","top-50","play-pp-200","curator-5","combo-727","same-map-100","fail-99","night-owl","first-chat","possessed","pass-3","pass-4","fc-3","fc-4","speed-50","stamina-50","jackspeed-50","accuracy-50","reading-50","release-50","coordination-50","consistency-50","concentration-50","speedjam-50","memory-50","friends-5","mapper-5","fail-10s","parallax"],
+ gold: ["grade-x","rice","ln","plays-5k","hits-10m","time-1000h","overall-75","overall-100","upgrades-50","ladders-5","overdrive-10","prestige-5","first-10","pp-5k","top-25","play-pp-500","curator-25","pass-5","pass-6","fc-5","fc-6","speed-100","stamina-100","jackspeed-100","accuracy-100","reading-100","release-100","coordination-100","consistency-100","concentration-100","speedjam-100","memory-100","friends-25","mapper-10"],
+ platinum: ["plays-25k","hits-50m","time-10000h","overall-105","upgrades-100","ladders-10","overdrive-100","prestige-25","first-100","pp-10k","top-10","play-pp-750","curator-100","pass-7","pass-8","fc-7","fc-8","speed-105","stamina-105","jackspeed-105","accuracy-105","reading-105","release-105","coordination-105","consistency-105","concentration-105","speedjam-105","memory-105","friends-100","mapper-50"],
+ divine: ["grade-xx","plays-100k","hits-1b","overall-110","ladders-11","overdrive-1000","prestige-100","rebirth","first-1000","pp-20k","top-1","play-pp-1k","pass-9","pass-10","fc-9","fc-10","speed-110","stamina-110","jackspeed-110","accuracy-110","reading-110","release-110","coordination-110","consistency-110","concentration-110","speedjam-110","memory-110","friends-1k","mapper-100"],
 };
 const MEDAL_TIER_BY_ID=new Map(Object.entries(MEDAL_IDS_BY_TIER).flatMap(([tier,ids])=>ids.map(id=>[id,tier])));
 const medalCountsFromIds=ids=>{
@@ -550,7 +550,7 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.5. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.6. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
