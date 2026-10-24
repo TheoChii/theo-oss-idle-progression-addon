@@ -1,7 +1,7 @@
-/* Theo's oss!idle Progression Toolkit v0.4.1 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.2 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
-const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,affected:10000,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
+const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
 let data={...A},root=null,tab='Improvement',section='Calculators',hotkeyHandler=null;
 const val=k=>Math.max(0,+data[k]||0),fmt=(v,d=2)=>Number.isFinite(v)?v.toLocaleString('en-US',{maximumFractionDigits:d}):'—';
 function cb(x0,y0,x1,y1){let ax=1-(x1=3*(x1-x0)-(x0*=3))-x0,ay=1-(y1=3*(y1-y0)-(y0*=3))-y0;return t=>{if(t<=0)return 0;if(t>=1)return 1;let r=t,s=0,d=1,x;for(let i=0;i<32;i++){x=r*(r*(r*ax+x1)+x0)-t;if(Math.abs(x)<1e-5)break;let dv=r*(r*ax*3+x1*2)+x0;if(Math.abs(dv)<1e-5)break;r-=x/dv;}if(r<0||r>1){r=t;for(let i=0;i<60;i++){x=r*(r*(r*ax+x1)+x0);if(Math.abs(x-t)<1e-5)break;if(t>x)s=r;else d=r;r=(d+s)/2;}}return r*(r*(r*ay+y1)+y0);};}
@@ -9,6 +9,8 @@ const early=cb(.1,.4,.95,0),late=cb(.5,0,1,.4),mind=cb(.6,0,.6,1);
 const xp=n=>100+9900*early(n/100)+90000*late((n-60)/40)+(n<100?0:5e6*(n-99)*(n-98));
 const xpTotal=[0];function to(n){n=Math.max(0,Math.floor(n));while(xpTotal.length<=n){let x=xpTotal.length-1;xpTotal.push(xpTotal[x]+xp(x));}return xpTotal[n];}
 const xpAt=n=>to(Math.floor(n))+(n%1)*xp(Math.floor(n));
+const realLevel=(level,partial)=>Math.max(0,Number(level)||0)+Math.min(.999999,Math.max(0,Number(partial)||0)/xp(Math.max(0,Number(level)||0)));
+function levelFromTotal(total){const t=Math.max(0,Number(total)||0);let l=0;while(l<10000&&to(l+1)<=t)l++;return l+Math.min(.999999,(t-to(l))/xp(l));}
 const sigma=n=>Math.max(1,Math.min(n,2.5*Math.pow(n,Math.log10(2))));
 /** Medal bonuses compound per owned medal, in a separate XP multiplier pool. */
 const MEDAL_RATES={bronze:.0025,silver:.005,gold:.01,platinum:.02,divine:.03};
@@ -113,7 +115,7 @@ function skillMetrics(id,l){
  * Based on oss-idle/addon-sdk bridge/db.ts, bridge/character.ts, bridge/beatmaps.ts.
  * Never update the game DB, game indexes or IndexedDB version. */
 const mapState={status:'idle',error:'',sets:[],characters:[],characterId:null,suggestedId:null,
-  played:new Map(),query:'',sort:'stars',keys:'all',limit:'all',unplayed:true};
+  played:new Map(),query:'',sort:'stars',limit:'all',unplayed:true};
 let mapRequest=0;
 const safeText=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const resultRows=res=>{const x=res?.[0];return x?x.values.map(row=>Object.fromEntries(x.columns.map((k,i)=>[k,row[i]]))):[]};
@@ -174,9 +176,8 @@ const mapMatches=()=>mapState.sets.flatMap(set=>set.versions.map(v=>({
   artist:String(set.artist||'Unknown artist'),difficulty:String(v.version||'Unnamed'),
   stars:Number(v.difficulty),keys:Number(v.keys),objects:Number(v.objects),
   mode:Number(v.mode),plays:mapState.played.get(Number(v.id))||0
-}))).filter(x=>x.mode===3&&Number.isInteger(x.id)&&x.id>0&&Number.isFinite(x.stars)&&x.stars>=0&&Number.isFinite(x.objects))
+}))).filter(x=>x.mode===3&&Number.isInteger(x.id)&&x.id>0&&Number.isFinite(x.stars)&&x.stars>=0&&Number.isFinite(x.objects)&&x.keys===4)
   .filter(x=>(!mapState.unplayed||!x.plays)
-    &&(mapState.keys==='all'||x.keys===Number(mapState.keys))
     &&(mapState.limit==='all'||x.stars<=Number(mapState.limit))
     &&(!mapState.query||(x.title+' '+x.artist+' '+x.difficulty+' '+x.id).toLowerCase().includes(mapState.query.toLowerCase())))
   .sort((a,b)=>mapState.sort==='notes'?a.objects-b.objects||a.stars-b.stars:
@@ -186,9 +187,9 @@ function renderMapResults(){
  const target=root?.shadowRoot.querySelector('#map-results');
  if(!target||mapState.status!=='ready')return;
  const found=mapMatches(),visible=found.slice(0,80);
- const uniqueAll=mapState.sets.flatMap(x=>x.versions||[]).filter(x=>Number(x.mode)===3).length;
+ const uniqueAll=mapState.sets.flatMap(x=>x.versions||[]).filter(x=>Number(x.mode)===3&&Number(x.keys)===4).length;
  target.innerHTML=grid([
-  row('Downloaded mania charts',fmt(uniqueAll,0),'Stored in this browser'),
+  row('Downloaded 4K mania charts',fmt(uniqueAll,0),'Stored in this browser'),
   row(mapState.unplayed?'No local play found':'Matching charts',fmt(found.length,0),'For selected character and filters')
  ])+(found.length?tbl(['Map / Difficulty','Stars','Keys','Notes','Local plays','Link'],visible.map(x=>[
   '<b>'+safeText(x.title)+'</b><small>'+safeText(x.artist)+' • '+safeText(x.difficulty)+'</small>',
@@ -199,7 +200,7 @@ function renderMapResults(){
 }
 function renderDiscovery(){
  if(!root||section!=='Discovery')return;
- let c='<p>Explore downloaded osu!mania charts and find maps without a score in your <b>local play history</b>. This is a read-only lookup, not the live ranked catalog.</p>';
+ let c='<p>Explore downloaded <b>4K osu!mania</b> charts and find maps without a score in your <b>local play history</b>. This is a read-only lookup, not the live ranked catalog.</p>';
  if(mapState.status==='loading')c+='<p>Reading local beatmaps and scores…</p>';
  else if(mapState.status==='error')c+='<p class="notice">'+safeText(mapState.error)+'</p>';
  else if(mapState.status==='idle')c+='<p>Select Refresh to load your downloaded maps.</p>';
@@ -207,7 +208,6 @@ function renderDiscovery(){
   const char=mapState.characters.find(x=>Number(x.id)===mapState.characterId);
   c+=grid([
    mapSelect('Character',{name:'character',items:mapState.characters.map(x=>[x.id,x.name+' ('+(Number(x.local)?'local':'account')+')'])},mapState.characterId),
-   mapSelect('Keys',{name:'keys',items:[['all','All key modes'],['4','4 keys'],['7','7 keys']]},mapState.keys),
    mapSelect('Max stars',{name:'limit',items:[['all','All difficulties'],['2','Up to 2★'],['3','Up to 3★'],['4','Up to 4★'],['5','Up to 5★'],['6','Up to 6★']]},mapState.limit),
    mapSelect('Sort by',{name:'sort',items:[['stars','Easiest first'],['hardest','Hardest first'],['notes','Fewest notes'],['title','Title A–Z']]},mapState.sort)
   ]);
@@ -221,15 +221,77 @@ function renderDiscovery(){
  renderMapResults();
 }
 
+/** From oss-idle/shared/fatigue.ts (1.2.2): strain minutes and XP penalty.
+ * Fatigue starts at 300, reaches its XP floor at 420; no direct warm-up XP penalty. */
+const FATIGUE_REST_RATE=.4,FATIGUE_CAP=420,FATIGUE_START=300,FATIGUE_FULL=420;
+const fatigueLevel=minutes=>cb(.4,0,.6,1)(Math.max(0,Math.min(1,(minutes-FATIGUE_START)/(FATIGUE_FULL-FATIGUE_START))));
+const fatigueXP=minutes=>1-.95*fatigueLevel(minutes);
+const restedMinutes=(minutes,rest)=>Math.max(0,Math.min(FATIGUE_CAP,minutes)-FATIGUE_REST_RATE*Math.max(0,rest));
+const strainedMinutes=(duration,physicalShare)=>Math.max(0,duration)*Math.min(1,Math.max(0,physicalShare)/40);
+const afterFatigue=(current,duration,physicalShare)=>{
+ const strain=strainedMinutes(duration,physicalShare);
+ return Math.min(FATIGUE_CAP,Math.max(0,current+strain-FATIGUE_REST_RATE*(Math.max(0,duration)-strain)));
+};
+const farmXP=(physical,memory,affected,block,minute,medal)=>({physical:physical*fatigueXP(minute)*medal,memory:memory*medal,affected:affected*block*medal});
+function farmProjection(count,current,minutes,share,between,physical,memory,affected,repeats,medal){
+ let state=Math.max(0,current),rows=[];
+ for(let i=0;i<count;i++){
+  if(i>0)state=restedMinutes(state,between);
+  const block=1-.75*mind(Math.min(1,(repeats+i)/25)),parts=farmXP(physical,memory,affected,block,state,medal);
+  if([0,4,19,49].includes(i))rows.push([i+1,state,parts.physical+parts.memory+parts.affected]);
+  state=afterFatigue(state,minutes,share);
+ }
+ return rows;
+}
 const row=(label,value,detail='')=>'<div class="metric"><small>'+label+'</small><b>'+value+'</b><small>'+detail+'</small></div>';
 const field=(k,label)=>'<label>'+label+'<input type="number" data-key="'+k+'" step="any" min="0" value="'+data[k]+'"></label>';
 const grid=items=>'<div class="grid">'+items.join('')+'</div>';
 const medalFields=()=>grid(Object.keys(MEDAL_RATES).map(k=>field(k,k[0].toUpperCase()+k.slice(1)+' medals')));
+const playerState={status:'idle',error:'',rows:[],characterId:null,skill:'speed',name:''};
+let playerRequest=0;
+/** Use only the game's locally saved SQLite character snapshot; no writes or network. */
+async function loadPlayerStats(){
+ const request=++playerRequest;playerState.status='loading';playerState.error='';render();
+ try{
+  const [rows,latest]=await Promise.all([
+   gameRead('SELECT * FROM character ORDER BY local ASC, current DESC, overallTotalXp DESC'),
+   gameRead('SELECT characterId FROM score ORDER BY playedAt DESC LIMIT 1')
+  ]);
+  if(!root||request!==playerRequest)return;
+  const selected=rows.find(r=>Number(r.id)===Number(playerState.characterId));
+  const fallback=rows.find(r=>Number(r.local)===0)||rows.find(r=>Number(r.current)===1)||rows.find(r=>Number(r.id)===Number(latest[0]?.characterId))||rows[0];
+  const character=selected||fallback;
+  if(!character)throw Error('No character saved in the local game database.');
+  const skill=SKILL_IDS.includes(playerState.skill)?playerState.skill:'speed';
+  const names=[skill,skill+'XP',skill+'Upgrades',skill+'Overdrive',skill+'Prestige','overallTotalXp'];
+  if(names.some(k=>!Number.isFinite(Number(character[k]))))throw Error('Local character is missing progression fields. Open your game profile and retry.');
+  const level=realLevel(character[skill],character[skill+'XP']),prestige=Math.max(0,Math.floor(Number(character[skill+'Prestige'])));
+  data.level=level;data.upgrades=Math.max(0,Math.floor(Number(character[skill+'Upgrades'])));
+  data.overdrive=Math.max(0,Number(character[skill+'Overdrive']));data.prestige=prestige;
+  data.improveSkill=skill;data.improveCurrent=level;data.improvePrestige=prestige;
+  data.improveTarget=level+.1;data.overall=levelFromTotal(character.overallTotalXp);
+  data.buyAt=Math.max(level,minLevel(data.upgrades));
+  try{localStorage.setItem(K,JSON.stringify(data));}catch{}
+  playerState.rows=rows;playerState.characterId=Number(character.id);playerState.name=String(character.name||'Unnamed');playerState.status='ready';
+ }catch(e){
+  if(!root||request!==playerRequest)return;
+  playerState.status='error';playerState.error=e?.message||String(e);
+ }
+ render();
+}
+const playerControls=()=>'<div class="player-tools"><p><b>Saved character stats</b> — read-only local game snapshot. XP/play, medal counts and fatigue remain manual.</p>'+
+ grid([
+ '<label>Skill<select data-player="skill">'+SKILL_IDS.map(id=>'<option value="'+id+'"'+(id===playerState.skill?' selected':'')+'>'+SKILL_LABELS[id]+'</option>').join('')+'</select></label>',
+ playerState.rows.length?'<label>Character<select data-player="character">'+playerState.rows.map(r=>'<option value="'+Number(r.id)+'"'+(Number(r.id)===playerState.characterId?' selected':'')+'>'+safeText(r.name||'Unnamed')+'</option>').join('')+'</select></label>':''
+ ])+
+ '<button class="action-button" data-action="load-stats"'+(playerState.status==='loading'?' disabled':'')+'>'+(playerState.status==='loading'?'Loading…':'↻ Use current player stats')+'</button>'+
+ (playerState.status==='ready'?'<p class="fine">Loaded '+safeText(playerState.name)+' / '+safeText(SKILL_LABELS[playerState.skill])+'. Saved snapshot; online progress may be newer.</p>':
+ playerState.status==='error'?'<p class="notice">'+safeText(playerState.error)+'</p>':'')+'</div>';
 const medalSummary=m=>grid([row('Medal XP multiplier',fmt(m,4)+'×','Compounded across all earned medals'),row('Medal rates','0.25% · 0.5% · 1%','Bronze, Silver, Gold · Platinum 2% · Divine 3%')]);
 const tbl=(names,rows)=>'<div class="scroll"><table><thead><tr>'+names.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
 function render(){
  if(section==='Discovery'){renderDiscovery();return;}
- let c='',u=Math.floor(val('upgrades')),p=Math.floor(val('prestige')),s=val('overdrive'),l=val('level'),xpRate=Math.max(1,val('xpPlay')),medalBoost=medals(data),currentBoost=boost(u,s,p,medalBoost),effectiveXpRate=xpRate*currentBoost;
+ let c=playerControls(),u=Math.floor(val('upgrades')),p=Math.floor(val('prestige')),s=val('overdrive'),l=val('level'),xpRate=Math.max(1,val('xpPlay')),medalBoost=medals(data),currentBoost=boost(u,s,p,medalBoost),effectiveXpRate=xpRate*currentBoost;
  if(tab==='Improvement'){
  const current=val('improveCurrent'),target=val('improveTarget'),prestige=Math.floor(val('improvePrestige'));
  const choice=SKILL_IDS.includes(data.improveSkill)?data.improveSkill:'speed';
@@ -238,7 +300,7 @@ function render(){
  const change=(a,b,better)=>{const n=pct(a,b,better);return Number.isFinite(n)?(n>=0?'+':'')+fmt(n,3)+'%':'—';};
  const detail=(m,n)=>{const delta=n.value-m.value;return [m.label,fmt(m.value,5)+m.unit,fmt(n.value,5)+n.unit,(delta>=0?'+':'')+fmt(delta,5)+m.unit,change(m.value,n.value,m.better)];};
  const skillPicker='<label>Skill<select data-key="improveSkill">'+SKILL_IDS.map(id=>'<option value="'+id+'"'+(choice===id?' selected':'')+'>'+SKILL_LABELS[id]+'</option>').join('')+'</select></label>';
- c='<p>Compare the real gameplay parameters of every skill. The game maps effective level (real XP level + prestige bonus) through a reduced high-level curve before applying each skill formula.</p>';
+ c+='<p>Compare the real gameplay parameters of every skill. The game maps effective level (real XP level + prestige bonus) through a reduced high-level curve before applying each skill formula.</p>';
  c+=grid([skillPicker,field('improveCurrent','Current real XP level'),field('improveTarget','Target real XP level'),field('improvePrestige','Prestiges on this skill')]);
  c+=grid([row('Current effective level',fmt(current+prestige,3),'Includes '+prestige+' prestige bonus'),row('Target effective level',fmt(target+prestige,3)),row('Gameplay level',fmt(before,4)+' → '+fmt(after,4),'Internal skill strain curves'),row('Raw skill XP needed',target>=current?fmt(xpAt(target)-xpAt(current),0):'Target below current','Assumes same prestige, no upgrades')]);
  if(target<current)c+='<p class="fine">The target is lower than the current level: the table below shows the resulting decrease, not the cost of leveling.</p>';
@@ -250,7 +312,7 @@ function render(){
  c+=tbl(['Skill','Parameter','Current','Target','Improvement'],all);
  c+='<p class="fine">These are exact per-level model parameter formulas, not a prediction of accuracy, clear rate, or overall performance on a particular map. NPS, strain rates, error factors, and percentages use different units and are not directly comparable across skills. XP earned includes no purchase spending and assumes an unchanged prestige count.</p>';
  }else if(tab==='Overdrive'){
- c='<p>Preview an upgrade at any level. Current defaults match your Speed build.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige count'),field('buyAt','Plan to buy at XP level'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
+ c+='<p>Preview an upgrade at any level. Current defaults match your Speed build.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige count'),field('buyAt','Plan to buy at XP level'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
  let req=minLevel(u),earliest=Math.max(l,req),choose=Math.max(earliest,val('buyAt')),q=preview(choose,u,s,p,medalBoost);
  // Keep the Overdrive status grid at four cards in every state: locked, eligible and maxed.
  const maxed=u>=10+p,eligible=!maxed&&l>=req,remaining=maxed?0:Math.max(0,xpAt(req)-xpAt(l)),now=eligible?preview(l,u,s,p,medalBoost):null;
@@ -269,24 +331,38 @@ function render(){
  const candidates=[earliest,earliest+.1,earliest+.25,earliest+.5,earliest+1,earliest+2,choose],unique=[...new Set(candidates.map(n=>+n.toFixed(4)))].sort((a,b)=>a-b);
  let rows=[];for(const n of unique){let x=preview(n,u,s,p,medalBoost);if(x)rows.push(['Lv'+fmt(n)+(Math.abs(n-choose)<.00001?' ★':''),'+'+fmt(x.add)+'σ',fmt(x.newSigma)+'σ',fmt(x.newBoost,4)+'×',fmt(Math.max(0,xpAt(n)-xpAt(l)),0)]);}if(rows.length)c+=tbl(['Buy at','Earn σ','Total σ','XP boost','XP to wait'],rows);
  }else if(tab==='Prestige'){
- c='<p>Prestiging resets one skill to Lv0, loses upgrades and σ, but adds +10% permanent XP, +1 bonus level, +1 gear slot. Earned medals are retained.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored σ'),field('prestige','Previous prestiges'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
+ c+='<p>Prestiging resets one skill to Lv0, loses upgrades and σ, but adds +10% permanent XP, +1 bonus level, +1 gear slot. Earned medals are retained.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored σ'),field('prestige','Previous prestiges'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
  let req=100+p,remaining=Math.max(0,xpAt(req)-xpAt(l));
  c+=grid([row('Next prestige','Lv'+req,fmt(remaining,0)+' XP remaining'),row('Estimated plays',fmt(Math.ceil(remaining/effectiveXpRate),0),'Fixed XP/play'),row('Multiplier now',fmt(currentBoost,4)+'×'),row('Multiplier after reset',fmt(Math.pow(1.1,p+1)*medalBoost,4)+'×','Zero upgrades and σ; medals retained'),row('Permanent prestige bonus',fmt(Math.pow(1.1,p+1))+'×','Medals listed separately'),row('Available slots after',fmt(11+p,0))]);
  }else if(tab==='Rebirth'){
- c='<p>Overall level 110 needs approximately 2.202 billion cumulative unspent XP. Estimates assume no future purchases and unchanged XP rate.</p>'+grid([field('overall','Overall XP level'),field('totalXpPlay','Total skill XP/play before medal boosts'),field('minutes','Minutes per play'),field('hours','Hours farming per day')]);
+ c+='<p>Overall level 110 needs approximately 2.202 billion cumulative unspent XP. Estimates assume no future purchases and unchanged XP rate.</p>'+grid([field('overall','Overall XP level'),field('totalXpPlay','Total skill XP/play before medal boosts'),field('minutes','Minutes per play'),field('hours','Hours farming per day')]);
  c+=medalFields();c+=medalSummary(medalBoost);let remaining=Math.max(0,to(110)-xpAt(val('overall'))),plays=Math.ceil(remaining/Math.max(1,val('totalXpPlay')*medalBoost));
  c+=grid([row('XP remaining',fmt(remaining,0)),row('Estimated plays',fmt(plays,0)),row('Total hours',fmt(plays*val('minutes')/60)),row('Days at schedule',fmt(plays*val('minutes')/60/Math.max(1,val('hours')))),row('Full rebirth threshold',fmt(to(110),0))]);
  c+=tbl(['Overall Lv','Cumulative XP'],[100,101,102,103,104,105,106,107,108,109,110].map(n=>[n,fmt(to(n),0)]));
  }else{
- c='<p>Mindblock is capped at a 75% reduction after 25 previous same-map plays. Speed, Jack Speed, Stamina and Memory are exempt.</p>'+grid([field('repeats','Recent same-map plays'),field('exempt','Base XP/play from exempt skills'),field('affected','Base XP/play from affected skills'),field('minutes','Minutes per play')]);
- c+=medalFields();c+=medalSummary(medalBoost);let m=1-.75*mind(Math.min(1,val('repeats')/25)),gained=(val('exempt')+val('affected')*m)*medalBoost;
- c+=grid([row('Penalty',fmt((1-m)*100)+'%'),row('Affected XP kept',fmt(m*100)+'%'),row('XP per play',fmt(gained,0)),row('XP per minute',fmt(gained/Math.max(.01,val('minutes')),0))]);
- c+=tbl(['Prior plays','XP reduction','XP retained'],[0,5,10,15,20,25].map(n=>[n,fmt(75*mind(n/25))+'%',fmt(100-75*mind(n/25))+'%']));
+ c+='<p><b>Physical fatigue</b> affects Speed, Stamina and Jack Speed (5–7 strained hours: down to 5% XP). Memory is exempt from fatigue and Mindblock; other skills receive Mindblock. Fatigue rests 0.4 strained minutes per minute; 40% physical note strain means full strain.</p>'+
+ grid([field('physical','Physical XP/play before medals'),field('memory','Memory XP/play before medals'),field('affected','Other skills XP/play before medals'),field('repeats','Prior same-map plays'),
+ field('fatigueMinutes','Current fatigue (strained minutes)'),field('restMinutes','Rest since last play (minutes)'),
+ field('strainShare','Physical note strain share (%)'),field('minutes','Minutes per map'),field('betweenMinutes','Idle gap between maps (minutes)')]);
+ c+=medalFields();c+=medalSummary(medalBoost);
+ const rested=restedMinutes(val('fatigueMinutes'),val('restMinutes'));
+ const block=1-.75*mind(Math.min(1,val('repeats')/25)),parts=farmXP(val('physical'),val('memory'),val('affected'),block,rested,medalBoost),gained=parts.physical+parts.memory+parts.affected;
+ const next=afterFatigue(rested,val('minutes'),val('strainShare')),projection=farmProjection(50,rested,val('minutes'),val('strainShare'),val('betweenMinutes'),val('physical'),val('memory'),val('affected'),val('repeats'),medalBoost);
+ c+=grid([row('Physical XP kept',fmt(fatigueXP(rested)*100,2)+'%','Only Speed / Stamina / Jack Speed'),
+ row('Mindblock XP kept',fmt(block*100,2)+'%','Other non-exempt skills'),
+ row('Fatigue now',fmt(rested,1)+' min',fmt(fatigueLevel(rested)*100,1)+'% fatigue'),
+ row('After this map',fmt(next,1)+' min','Physical note strain model'),
+ row('Physical XP / map',fmt(parts.physical,0),'Fatigue × medals'),
+ row('Total XP / map',fmt(gained,0),'Physical + Memory + other skills'),
+ row('Total XP / minute',fmt(gained/Math.max(.01,val('minutes')),0),'Next map estimate'),
+ row('Until full fatigue',fmt(Math.max(0,FATIGUE_FULL-rested),1)+' min','Remaining strained minutes')]);
+ c+=tbl(['Upcoming play','Fatigue before','Total XP / play'],projection.map(([play,tired,earned])=>['#'+play,fmt(tired,1)+' min',fmt(earned,0)]));
+ c+='<p class="fine">Manual fatigue is accumulated strained minutes, not total session time. XP values are before medals, but may include other bonuses. Projection assumes the same map and strain share, a fixed break between plays, and increasing same-map repetitions. Warm-up affects gameplay, not the direct XP multiplier, but can indirectly change XP earned.</p>';
  }
  root.shadowRoot.querySelector('#contents').innerHTML=c+'<p class="fine">Read-only. Based on oss!idle public progression formulas. Does not access account data or change game progress.</p>';
 }
 export function mount(){
- if(root)return;document.getElementById('theo-oss-idle-toolkit')?.remove();try{data={...data,...JSON.parse(localStorage.getItem(K)||'{}')};}catch{}
+ if(root)return;document.getElementById('theo-oss-idle-toolkit')?.remove();try{const saved=JSON.parse(localStorage.getItem(K)||'{}');data={...data,...saved};if(!Object.hasOwn(saved,'physical')&&Object.hasOwn(saved,'exempt')){data.physical=Math.max(0,Number(saved.exempt)||0);data.memory=0;}}catch{}
  root=document.createElement('div');root.id='theo-oss-idle-toolkit';root.attachShadow({mode:'open'});
  const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:0;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}';
  root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
@@ -301,15 +377,19 @@ export function mount(){
  if(b.dataset.tab){section='Calculators';tab=b.dataset.tab;root.dataset.section='calculators';
   root.shadowRoot.querySelectorAll('.tools button').forEach(n=>n.classList.toggle('active',n.dataset.tab===tab));render();}
  if(b.dataset.action==='refresh-maps'&&mapState.status!=='loading')void loadMapDiscovery();
+  if(b.dataset.action==='load-stats'&&playerState.status!=='loading')void loadPlayerStats();
  e.stopPropagation();
 });
  root.shadowRoot.addEventListener('change',e=>{
- const m=e.target.dataset.mapFilter;
+ const pc=e.target.dataset.player;
+  if(pc==='skill'&&SKILL_IDS.includes(e.target.value)){playerState.skill=e.target.value;playerState.status='idle';render();e.stopPropagation();return;}
+  if(pc==='character'){playerState.characterId=Number(e.target.value);playerState.status='idle';render();e.stopPropagation();return;}
+  const m=e.target.dataset.mapFilter;
  if(m&&mapState.status==='ready'){
   if(m==='character'){mapState.characterId=Number(e.target.value);void loadMapDiscovery();}
   else{mapState[m]=m==='unplayed'?Boolean(e.target.checked):e.target.value;renderDiscovery();}
  }else{const k=e.target.dataset.key;
-  if(k){data[k]=k==='improveSkill'?e.target.value:+e.target.value;try{localStorage.setItem(K,JSON.stringify(data));}catch{}render();}
+  if(k){data[k]=k==='improveSkill'?e.target.value:+e.target.value;if(k==='improveSkill')playerState.skill=data[k];try{localStorage.setItem(K,JSON.stringify(data));}catch{}render();}
  }
  e.stopPropagation();
 });
@@ -330,10 +410,10 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.1. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.2. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
- hotkeyHandler=null;mapRequest++;section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
+ hotkeyHandler=null;mapRequest++;playerRequest++;playerState.status='idle';playerState.rows=[];playerState.characterId=null;section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
  root?.remove();root=null;
 }
