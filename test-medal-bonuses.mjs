@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 const source = await fs.readFile(new URL('./progression-toolkit.addon.js', import.meta.url), 'utf8');
-assert(source.includes('v0.4.1'));
+assert(source.includes('v0.4.2'));
 assert(source.includes("['Calculators','Discovery']"), 'Discovery section must be retained');
 const mod = await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport { MEDAL_RATES, medals, boost, preview, xpAt, to, cb };').toString('base64'));
 const { MEDAL_RATES, medals, boost, preview, xpAt, to, cb } = mod;
@@ -59,6 +59,6 @@ html=tab('Rebirth');
 assert.equal(metric('Estimated plays'),Math.ceil(Math.max(0,to(110)-xpAt(100.13))/(90000*m)));
 html=tab('Farming');
 const mind=1-.75*cb(.6,0,.6,1)(10/25);
-approx(metric('XP per play'),expectedDisplay((30000+10000*mind)*m,0),'farming XP/play includes medals');
+approx(metric('Total XP / map'),expectedDisplay((30000+10000*mind)*m,0),'farming XP/play includes medals');
 mod.unmount();
 console.log('PASS: compounded medal XP rates, Overdrive, Prestige, Rebirth and Farming UI, Discovery preserved');
