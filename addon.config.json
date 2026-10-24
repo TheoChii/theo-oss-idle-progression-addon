@@ -1,0 +1,9 @@
+{
+  "name": "Theo's oss!idle Progression Toolkit",
+  "entry": "progression-toolkit.addon.js",
+  "outfile": "dist/progression-toolkit.addon.js",
+  "types": [
+    "gameplay"
+  ],
+  "sharedReact": false
+}
