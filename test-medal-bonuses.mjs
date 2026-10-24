@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 const source = await fs.readFile(new URL('./progression-toolkit.addon.js', import.meta.url), 'utf8');
-assert(source.includes('v0.4.3'));
+assert(source.includes('v0.4.4'));
 assert(source.includes("['Calculators','Discovery']"), 'Discovery section must be retained');
 const mod = await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport { MEDAL_RATES, medals, boost, preview, xpAt, to, cb };').toString('base64'));
 const { MEDAL_RATES, medals, boost, preview, xpAt, to, cb } = mod;
@@ -52,6 +52,7 @@ assert(html.includes('Bronze medals')&&html.includes('Divine medals'));
 assert(html.includes('🏅 Medals '+m.toLocaleString('en-US',{maximumFractionDigits:4})+'×'),'compact medal summary');
 approx(metric('Current multiplier'),expectedDisplay(boost(9,15,1,m)),'overdrive multiplier display');
 assert.equal(metric('Plays to unlock'),Math.ceil((xpAt(100)-xpAt(90))/(30000*boost(9,15,1,m))));
+assert.equal(metric('Plays to planned upgrade'),Math.ceil((xpAt(100.25)-xpAt(90))/(30000*boost(9,15,1,m))));
 html=tab('Prestige');
 approx(metric('Multiplier after reset'),expectedDisplay(1.1**2*m),'prestige after-reset display');
 assert.equal(metric('Estimated plays'),Math.ceil((xpAt(101)-xpAt(90))/(30000*boost(9,15,1,m))));
