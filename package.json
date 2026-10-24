@@ -1,11 +1,11 @@
 {
   "name": "theo-oss-idle-progression-addon",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node test-addon-hotkey.mjs && node test-skill-improvement.mjs && node test-overdrive-layout.mjs && node test-map-discovery.mjs && node test-medal-bonuses.mjs && node test-fatigue-player-stats.mjs && node test-auto-medal-sync.mjs"
+    "test": "node test-addon-hotkey.mjs && node test-skill-improvement.mjs && node test-overdrive-layout.mjs && node test-map-discovery.mjs && node test-medal-bonuses.mjs && node test-fatigue-player-stats.mjs && node test-auto-medal-sync.mjs && node test-warmup-planner.mjs"
   }
 }
