@@ -97,6 +97,8 @@ assert(contents.innerHTML.includes('First &lt;account&gt;'),'character XSS escap
 assert.equal(versionUsed,undefined,'must not specify an IDB schema version');
 assert.equal(idbMode,'readonly','must read IDB without a write transaction');
 assert(results.innerHTML.includes('Never Played'));
+assert(!contents.innerHTML.includes('data-map-filter=\"keys\"'),'No redundant key selector');
+assert(!results.innerHTML.includes('7K'),'Only 4K charts returned');
 assert(results.innerHTML.includes('4K MX'),'second difficulty is unplayed even if set was played');
 assert(!results.innerHTML.includes('Played &lt;Song&gt;</b><small>Alice &amp; Bob • 4K HD'),'played chart should be excluded');
 assert(!results.innerHTML.includes('Standard'),'non-mania mode excluded');
@@ -106,8 +108,6 @@ changed('character','22');
 await settled();
 assert(!results.innerHTML.includes('Never Played</b><small>Artist • Normal'),'alt character has played map 200 difficulty');
 assert(results.innerHTML.includes('4K HD'),'alt character has not played map 100');
-changed('keys','4');
-assert(!results.innerHTML.includes('7K'),'four-key filter removes 7-key charts');
 changed('limit','3');
 assert(!results.innerHTML.includes('4K MX'),'star cap filters 3.6-star chart');
 input('Played');
