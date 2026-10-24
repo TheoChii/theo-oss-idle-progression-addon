@@ -1,4 +1,4 @@
-/* Theo's oss!idle Progression Toolkit v0.4.2 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.3 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
@@ -14,6 +14,33 @@ function levelFromTotal(total){const t=Math.max(0,Number(total)||0);let l=0;whil
 const sigma=n=>Math.max(1,Math.min(n,2.5*Math.pow(n,Math.log10(2))));
 /** Medal bonuses compound per owned medal, in a separate XP multiplier pool. */
 const MEDAL_RATES={bronze:.0025,silver:.005,gold:.01,platinum:.02,divine:.03};
+/* Medal IDs/tier groups mirrored from official achievements/catalogue.ts, 2026-10-24.
+ * Unknown future IDs are ignored, and reported rather than misclassified. */
+const MEDAL_IDS_BY_TIER={
+ bronze: ["plays-100","hits-100k","time-10h","overall-25","upgrades-1","top-75","play-pp-50","play-pp-100","curator-1","pass-1","pass-2","fc-1","fc-2"],
+ silver: ["grade-ss","plays-1k","hits-1m","time-100h","overall-50","upgrades-10","ladders-1","overdrive-2","prestige-1","first-1","pp-1k","top-50","play-pp-200","curator-5","combo-727","same-map-100","fail-99","night-owl","first-chat","possessed","pass-3","pass-4","fc-3","fc-4","speed-50","stamina-50","jackspeed-50","accuracy-50","reading-50","release-50","coordination-50","consistency-50","concentration-50","speedjam-50","memory-50"],
+ gold: ["grade-x","rice","ln","plays-5k","hits-10m","time-1000h","overall-75","overall-100","upgrades-50","ladders-5","overdrive-10","prestige-5","first-10","pp-5k","top-25","play-pp-500","curator-25","pass-5","pass-6","fc-5","fc-6","speed-100","stamina-100","jackspeed-100","accuracy-100","reading-100","release-100","coordination-100","consistency-100","concentration-100","speedjam-100","memory-100"],
+ platinum: ["plays-25k","hits-50m","time-10000h","overall-105","upgrades-100","ladders-10","overdrive-100","prestige-25","first-100","pp-10k","top-10","play-pp-750","curator-100","pass-7","pass-8","fc-7","fc-8","speed-105","stamina-105","jackspeed-105","accuracy-105","reading-105","release-105","coordination-105","consistency-105","concentration-105","speedjam-105","memory-105"],
+ divine: ["grade-xx","plays-100k","hits-1b","overall-110","ladders-11","overdrive-1000","prestige-100","rebirth","first-1000","pp-20k","top-1","play-pp-1k","pass-9","pass-10","fc-9","fc-10","speed-110","stamina-110","jackspeed-110","accuracy-110","reading-110","release-110","coordination-110","consistency-110","concentration-110","speedjam-110","memory-110"],
+};
+const MEDAL_TIER_BY_ID=new Map(Object.entries(MEDAL_IDS_BY_TIER).flatMap(([tier,ids])=>ids.map(id=>[id,tier])));
+const medalCountsFromIds=ids=>{
+ const counts=Object.fromEntries(Object.keys(MEDAL_RATES).map(tier=>[tier,0]));let unknown=0;
+ for(const id of new Set(ids)){const tier=MEDAL_TIER_BY_ID.get(id);if(tier)counts[tier]++;else unknown++;}
+ return {counts,unknown};
+};
+/** Public, read-only medal list belonging to the chosen character; no login credentials. */
+async function fetchPlayerMedals(id){
+ if(!Number.isSafeInteger(id)||id<=0)throw Error('Online character ID needed for medal lookup.');
+ const base='https://api.oss.idle.rhythmgamers.net';
+ const response=await fetch(base+'/v1/characters/'+id+'/medals',{
+  method:'GET',credentials:'omit',signal:typeof AbortSignal!=='undefined'&&AbortSignal.timeout?AbortSignal.timeout(8000):undefined
+ });
+ if(!response.ok)throw Error('Medal service returned HTTP '+response.status);
+ const responseData=await response.json();
+ if(!responseData||!Array.isArray(responseData.held)||!responseData.held.every(x=>x&&typeof x.id==='string'))throw Error('Unexpected medal response format.');
+ return medalCountsFromIds(responseData.held.map(x=>x.id));
+}
 const medals=counts=>Object.entries(MEDAL_RATES).reduce((product,[tier,rate])=>product*Math.pow(1+rate,Math.max(0,Math.floor(+counts[tier]||0))),1);
 const boost=(u,s,p,m=1)=>(1+.1*u*sigma(s))*Math.pow(1.1,p)*m;
 const minLevel=u=>u<10?(u+1)*10:u+91;
@@ -247,7 +274,8 @@ const row=(label,value,detail='')=>'<div class="metric"><small>'+label+'</small>
 const field=(k,label)=>'<label>'+label+'<input type="number" data-key="'+k+'" step="any" min="0" value="'+data[k]+'"></label>';
 const grid=items=>'<div class="grid">'+items.join('')+'</div>';
 const medalFields=()=>grid(Object.keys(MEDAL_RATES).map(k=>field(k,k[0].toUpperCase()+k.slice(1)+' medals')));
-const playerState={status:'idle',error:'',rows:[],characterId:null,skill:'speed',name:''};
+const playerState={status:'idle',error:'',rows:[],characterId:null,skill:'speed',name:'',medalStatus:'idle',medalError:'',medalUnknown:0,medalCharacterId:null};
+const ui={odBuild:false,medalManual:false};
 let playerRequest=0;
 /** Use only the game's locally saved SQLite character snapshot; no writes or network. */
 async function loadPlayerStats(){
@@ -271,23 +299,53 @@ async function loadPlayerStats(){
   data.improveSkill=skill;data.improveCurrent=level;data.improvePrestige=prestige;
   data.improveTarget=level+.1;data.overall=levelFromTotal(character.overallTotalXp);
   data.buyAt=Math.max(level,minLevel(data.upgrades));
+  const characterId=Number(character.id);
+  playerState.rows=rows;playerState.characterId=characterId;playerState.name=String(character.name||'Unnamed');playerState.status='ready';
+  if(characterId>0&&!Number(character.local)){
+   playerState.medalStatus='loading';playerState.medalError='';
+   render();
+   try{
+    const {counts,unknown}=await fetchPlayerMedals(characterId);
+    if(!root||request!==playerRequest)return;
+    for(const [tier,n] of Object.entries(counts))data[tier]=n;
+    playerState.medalStatus='ready';playerState.medalUnknown=unknown;playerState.medalCharacterId=characterId;
+   }catch(error){
+    if(!root||request!==playerRequest)return;
+    playerState.medalStatus='error';playerState.medalError=error?.message||String(error);
+    if(playerState.medalCharacterId!==characterId){
+     for(const tier of Object.keys(MEDAL_RATES))data[tier]=0;
+    }
+   }
+  }else{
+   for(const tier of Object.keys(MEDAL_RATES))data[tier]=0;
+   playerState.medalStatus='offline';playerState.medalCharacterId=null;playerState.medalError='';
+  }
   try{localStorage.setItem(K,JSON.stringify(data));}catch{}
-  playerState.rows=rows;playerState.characterId=Number(character.id);playerState.name=String(character.name||'Unnamed');playerState.status='ready';
  }catch(e){
   if(!root||request!==playerRequest)return;
   playerState.status='error';playerState.error=e?.message||String(e);
  }
  render();
 }
-const playerControls=()=>'<div class="player-tools"><p><b>Saved character stats</b> — read-only local game snapshot. XP/play, medal counts and fatigue remain manual.</p>'+
- grid([
- '<label>Skill<select data-player="skill">'+SKILL_IDS.map(id=>'<option value="'+id+'"'+(id===playerState.skill?' selected':'')+'>'+SKILL_LABELS[id]+'</option>').join('')+'</select></label>',
- playerState.rows.length?'<label>Character<select data-player="character">'+playerState.rows.map(r=>'<option value="'+Number(r.id)+'"'+(Number(r.id)===playerState.characterId?' selected':'')+'>'+safeText(r.name||'Unnamed')+'</option>').join('')+'</select></label>':''
- ])+
- '<button class="action-button" data-action="load-stats"'+(playerState.status==='loading'?' disabled':'')+'>'+(playerState.status==='loading'?'Loading…':'↻ Use current player stats')+'</button>'+
- (playerState.status==='ready'?'<p class="fine">Loaded '+safeText(playerState.name)+' / '+safeText(SKILL_LABELS[playerState.skill])+'. Saved snapshot; online progress may be newer.</p>':
- playerState.status==='error'?'<p class="notice">'+safeText(playerState.error)+'</p>':'')+'</div>';
-const medalSummary=m=>grid([row('Medal XP multiplier',fmt(m,4)+'×','Compounded across all earned medals'),row('Medal rates','0.25% · 0.5% · 1%','Bronze, Silver, Gold · Platinum 2% · Divine 3%')]);
+const playerControls=()=>{
+ const picker='<label class="tool-picker">Skill<select data-player="skill">'+SKILL_IDS.map(id=>'<option value="'+id+'"'+(id===playerState.skill?' selected':'')+'>'+SKILL_LABELS[id]+'</option>').join('')+'</select></label>';
+ const charPicker=playerState.rows.length?'<label>Character<select data-player="character">'+playerState.rows.map(r=>'<option value="'+Number(r.id)+'"'+(Number(r.id)===playerState.characterId?' selected':'')+'>'+safeText(r.name||'Unnamed')+'</option>').join('')+'</select></label>':'';
+ const sync='<button class="action-button" data-action="load-stats"'+(playerState.status==='loading'?' disabled':'')+'>'+(playerState.status==='loading'?'Loading…':'↻ Use current player stats')+'</button>';
+ const note=playerState.status==='ready'?'Loaded '+safeText(playerState.name)+' / '+safeText(SKILL_LABELS[playerState.skill])+' · saved game snapshot':
+ playerState.status==='error'?safeText(playerState.error):'Read-only local character values';
+ const status='<small class="'+(playerState.status==='error'?'notice':'fine')+'">'+note+'</small>';
+ if(tab==='Overdrive')return '<div class="player-strip">'+picker+sync+status+'</div>'+(charPicker?'<details class="fold"><summary>Choose another character</summary>'+charPicker+'</details>':'');
+ return '<div class="player-tools"><p><b>Saved character stats</b> — read-only local game snapshot. XP/play and fatigue remain manual.</p>'+grid([picker,charPicker])+sync+'<p>'+status+'</p></div>';
+};
+const medalSummary=m=>{
+ const status=playerState.medalStatus==='ready'?'Auto-synced for '+safeText(playerState.name)+(playerState.medalUnknown?', '+playerState.medalUnknown+' unrecognized IDs':''):
+ playerState.medalStatus==='loading'?'Fetching medals from public character profile…':
+ playerState.medalStatus==='error'?'Automatic lookup unavailable: '+safeText(playerState.medalError):
+ playerState.medalStatus==='offline'?'Guest/local character: enter medals manually':'Use current player stats to load medals automatically';
+ const counts=Object.keys(MEDAL_RATES).map(t=>t[0].toUpperCase()+t.slice(1)+' '+Math.floor(val(t))).join(' · ');
+ return '<div class="medal-strip"><b>🏅 Medals '+fmt(m,4)+'×</b><small>'+status+'</small>'+
+ '<details class="fold" data-setting="medalManual"'+(ui.medalManual?' open':'')+'><summary>Medal counts / manual fallback</summary><p class="fine">'+counts+'</p>'+medalFields()+'</details></div>';
+};
 const tbl=(names,rows)=>'<div class="scroll"><table><thead><tr>'+names.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
 function render(){
  if(section==='Discovery'){renderDiscovery();return;}
@@ -312,7 +370,11 @@ function render(){
  c+=tbl(['Skill','Parameter','Current','Target','Improvement'],all);
  c+='<p class="fine">These are exact per-level model parameter formulas, not a prediction of accuracy, clear rate, or overall performance on a particular map. NPS, strain rates, error factors, and percentages use different units and are not directly comparable across skills. XP earned includes no purchase spending and assumes an unchanged prestige count.</p>';
  }else if(tab==='Overdrive'){
- c+='<p>Preview an upgrade at any level. Current defaults match your Speed build.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige count'),field('buyAt','Plan to buy at XP level'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
+ c+='<p class="fine">Choose a purchase level to compare the upgrade now vs. waiting. XP/play is the <b>base rate</b> before bonuses.</p>';
+ c+=grid([field('buyAt','Purchase at level'),field('xpPlay','Base XP/play')]);
+ c+='<details class="fold build-fold" data-setting="odBuild"'+(ui.odBuild?' open':'')+'><summary>Build inputs · Lv '+fmt(l,2)+' · '+u+' upgrades · '+fmt(s,2)+'σ · '+p+' prestige</summary>'+
+ grid([field('level','Current XP level'),field('upgrades','Upgrades'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige')])+'</details>';
+ c+=medalSummary(medalBoost);
  let req=minLevel(u),earliest=Math.max(l,req),choose=Math.max(earliest,val('buyAt')),q=preview(choose,u,s,p,medalBoost);
  // Keep the Overdrive status grid at four cards in every state: locked, eligible and maxed.
  const maxed=u>=10+p,eligible=!maxed&&l>=req,remaining=maxed?0:Math.max(0,xpAt(req)-xpAt(l)),now=eligible?preview(l,u,s,p,medalBoost):null;
@@ -327,16 +389,20 @@ function render(){
        maxed?'One extra slot per prestige':eligible?'At your current level':'At '+fmt(effectiveXpRate,0)+' boosted XP/play')
  ]);
  if(u===0)c+='<p class="fine">With 0 upgrades, your stored σ does not add XP by itself. Buying your first upgrade activates the upgrade bonus. Since your level is '+fmt(l)+', comparison rows begin at your current level rather than Lv'+req+'.</p>';
- if(q)c+=grid([row('Overdrive gained','+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ total'),row('Multiplier after',fmt(q.newBoost,4)+'×','from '+fmt(currentBoost,4)+'×'),row('Skill level after',fmt(q.after),'Spends '+fmt(q.cost,0)+' XP'),row('XP to planned purchase',fmt(Math.max(0,xpAt(choose)-xpAt(l)),0),fmt(Math.ceil(Math.max(0,xpAt(choose)-xpAt(l))/effectiveXpRate),0)+' plays')]);
+ if(q){
+  c+='<p class="section-label">Planned upgrade at Lv '+fmt(choose,2)+'</p>';
+  c+=grid([row('Gain', '+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ after'),row('New XP multiplier',fmt(q.newBoost,4)+'×','from '+fmt(currentBoost,4)+'×'),row('Level after purchase',fmt(q.after,3),'Costs '+fmt(q.cost,0)+' XP')]);
+  c+='<p class="fine">XP until purchase: '+fmt(Math.max(0,xpAt(choose)-xpAt(l)),0)+' (about '+fmt(Math.ceil(Math.max(0,xpAt(choose)-xpAt(l))/effectiveXpRate),0)+' plays at this rate)</p>';
+ }
  const candidates=[earliest,earliest+.1,earliest+.25,earliest+.5,earliest+1,earliest+2,choose],unique=[...new Set(candidates.map(n=>+n.toFixed(4)))].sort((a,b)=>a-b);
- let rows=[];for(const n of unique){let x=preview(n,u,s,p,medalBoost);if(x)rows.push(['Lv'+fmt(n)+(Math.abs(n-choose)<.00001?' ★':''),'+'+fmt(x.add)+'σ',fmt(x.newSigma)+'σ',fmt(x.newBoost,4)+'×',fmt(Math.max(0,xpAt(n)-xpAt(l)),0)]);}if(rows.length)c+=tbl(['Buy at','Earn σ','Total σ','XP boost','XP to wait'],rows);
+ let rows=[];for(const n of unique){let x=preview(n,u,s,p,medalBoost);if(x)rows.push(['Lv'+fmt(n)+(Math.abs(n-choose)<.00001?' ★':''),'+'+fmt(x.add)+'σ',fmt(x.newSigma)+'σ',fmt(x.newBoost,4)+'×',fmt(Math.max(0,xpAt(n)-xpAt(l)),0)]);}if(rows.length)c+='<details class="fold scenario-fold"><summary>Compare '+rows.length+' purchase levels</summary>'+tbl(['Buy at','Earn σ','Total σ','XP boost','XP to wait'],rows)+'</details>';
  }else if(tab==='Prestige'){
- c+='<p>Prestiging resets one skill to Lv0, loses upgrades and σ, but adds +10% permanent XP, +1 bonus level, +1 gear slot. Earned medals are retained.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored σ'),field('prestige','Previous prestiges'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
+ c+='<p>Prestiging resets one skill to Lv0, loses upgrades and σ, but adds +10% permanent XP, +1 bonus level, +1 gear slot. Earned medals are retained.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored σ'),field('prestige','Previous prestiges'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalSummary(medalBoost);
  let req=100+p,remaining=Math.max(0,xpAt(req)-xpAt(l));
  c+=grid([row('Next prestige','Lv'+req,fmt(remaining,0)+' XP remaining'),row('Estimated plays',fmt(Math.ceil(remaining/effectiveXpRate),0),'Fixed XP/play'),row('Multiplier now',fmt(currentBoost,4)+'×'),row('Multiplier after reset',fmt(Math.pow(1.1,p+1)*medalBoost,4)+'×','Zero upgrades and σ; medals retained'),row('Permanent prestige bonus',fmt(Math.pow(1.1,p+1))+'×','Medals listed separately'),row('Available slots after',fmt(11+p,0))]);
  }else if(tab==='Rebirth'){
  c+='<p>Overall level 110 needs approximately 2.202 billion cumulative unspent XP. Estimates assume no future purchases and unchanged XP rate.</p>'+grid([field('overall','Overall XP level'),field('totalXpPlay','Total skill XP/play before medal boosts'),field('minutes','Minutes per play'),field('hours','Hours farming per day')]);
- c+=medalFields();c+=medalSummary(medalBoost);let remaining=Math.max(0,to(110)-xpAt(val('overall'))),plays=Math.ceil(remaining/Math.max(1,val('totalXpPlay')*medalBoost));
+ c+=medalSummary(medalBoost);let remaining=Math.max(0,to(110)-xpAt(val('overall'))),plays=Math.ceil(remaining/Math.max(1,val('totalXpPlay')*medalBoost));
  c+=grid([row('XP remaining',fmt(remaining,0)),row('Estimated plays',fmt(plays,0)),row('Total hours',fmt(plays*val('minutes')/60)),row('Days at schedule',fmt(plays*val('minutes')/60/Math.max(1,val('hours')))),row('Full rebirth threshold',fmt(to(110),0))]);
  c+=tbl(['Overall Lv','Cumulative XP'],[100,101,102,103,104,105,106,107,108,109,110].map(n=>[n,fmt(to(n),0)]));
  }else{
@@ -344,7 +410,7 @@ function render(){
  grid([field('physical','Physical XP/play before medals'),field('memory','Memory XP/play before medals'),field('affected','Other skills XP/play before medals'),field('repeats','Prior same-map plays'),
  field('fatigueMinutes','Current fatigue (strained minutes)'),field('restMinutes','Rest since last play (minutes)'),
  field('strainShare','Physical note strain share (%)'),field('minutes','Minutes per map'),field('betweenMinutes','Idle gap between maps (minutes)')]);
- c+=medalFields();c+=medalSummary(medalBoost);
+ c+=medalSummary(medalBoost);
  const rested=restedMinutes(val('fatigueMinutes'),val('restMinutes'));
  const block=1-.75*mind(Math.min(1,val('repeats')/25)),parts=farmXP(val('physical'),val('memory'),val('affected'),block,rested,medalBoost),gained=parts.physical+parts.memory+parts.affected;
  const next=afterFatigue(rested,val('minutes'),val('strainShare')),projection=farmProjection(50,rested,val('minutes'),val('strainShare'),val('betweenMinutes'),val('physical'),val('memory'),val('affected'),val('repeats'),medalBoost);
@@ -359,12 +425,12 @@ function render(){
  c+=tbl(['Upcoming play','Fatigue before','Total XP / play'],projection.map(([play,tired,earned])=>['#'+play,fmt(tired,1)+' min',fmt(earned,0)]));
  c+='<p class="fine">Manual fatigue is accumulated strained minutes, not total session time. XP values are before medals, but may include other bonuses. Projection assumes the same map and strain share, a fixed break between plays, and increasing same-map repetitions. Warm-up affects gameplay, not the direct XP multiplier, but can indirectly change XP earned.</p>';
  }
- root.shadowRoot.querySelector('#contents').innerHTML=c+'<p class="fine">Read-only. Based on oss!idle public progression formulas. Does not access account data or change game progress.</p>';
+ root.shadowRoot.querySelector('#contents').innerHTML=c+'<p class="fine">Read-only calculations. Character stats come from local game saves; medal counts may be fetched from the public oss!idle character profile. No progress changes.</p>';
 }
 export function mount(){
  if(root)return;document.getElementById('theo-oss-idle-toolkit')?.remove();try{const saved=JSON.parse(localStorage.getItem(K)||'{}');data={...data,...saved};if(!Object.hasOwn(saved,'physical')&&Object.hasOwn(saved,'exempt')){data.physical=Math.max(0,Number(saved.exempt)||0);data.memory=0;}}catch{}
  root=document.createElement('div');root.id='theo-oss-idle-toolkit';root.attachShadow({mode:'open'});
- const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:0;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}';
+ const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:0;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}:host .player-strip{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:9px 10px;background:#242739;border:1px solid #3c4260;border-radius:10px}:host .player-strip .tool-picker{width:180px;flex:1 1 150px}:host .player-strip button{padding:10px 12px;border-radius:7px;white-space:nowrap}:host .player-strip small{flex:1 1 100%;margin-top:0}:host .medal-strip{background:#1e2b37;border:1px solid #3b5162;padding:8px 11px;margin:8px 0 12px;border-radius:9px;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}:host .medal-strip>b{font-size:13px;color:#dbeaff}:host .medal-strip>small{font-size:11px;color:#a9bacd;flex:1}:host details.fold{border:1px solid #3a425e;border-radius:8px;margin:10px 0;background:#202537}:host details.fold summary{cursor:pointer;user-select:none;padding:10px 12px;font-size:12px;color:#c8c7eb;font-weight:650;list-style:disclosure-closed}:host details.fold[open] summary{border-bottom:1px solid #3a425e;list-style:disclosure-open}:host details.fold .grid,:host details.fold label,:host details.fold p,:host details.fold .scroll{margin:10px}:host .medal-strip details.fold{flex:1 1 100%;margin:2px 0 0;border:0;background:transparent}:host .medal-strip details.fold summary{padding:4px 0;font-size:11px}:host .medal-strip details.fold .grid{margin:8px 0}:host .section-label{font-size:12px;color:#ede5ff;font-weight:700;margin-top:15px}:host .scenario-fold .scroll{max-height:260px}:host .panel{width:min(740px,95vw)}:host .metric{padding:9px}:host .metric b{font-size:17px}:host .grid{gap:7px}:host input,:host select{padding:8px}:host .player-tools .grid{margin:6px 0}:host details.fold .tool-picker{margin-bottom:8px}@media(max-width:480px){:host .panel{width:97vw;max-height:90vh}:host .player-strip button{flex:1 1 auto}:host nav button{font-size:10px;padding:9px 1px}:host .metric b{font-size:15px}}';
  root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
  root.shadowRoot.addEventListener('click',e=>{
  const b=e.target.closest('button');if(!b)return;
@@ -380,6 +446,7 @@ export function mount(){
   if(b.dataset.action==='load-stats'&&playerState.status!=='loading')void loadPlayerStats();
  e.stopPropagation();
 });
+ root.shadowRoot.addEventListener('toggle',e=>{if(e.target?.dataset?.setting in ui)ui[e.target.dataset.setting]=e.target.open;},true);
  root.shadowRoot.addEventListener('change',e=>{
  const pc=e.target.dataset.player;
   if(pc==='skill'&&SKILL_IDS.includes(e.target.value)){playerState.skill=e.target.value;playerState.status='idle';render();e.stopPropagation();return;}
@@ -410,10 +477,10 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.2. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.3. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
- hotkeyHandler=null;mapRequest++;playerRequest++;playerState.status='idle';playerState.rows=[];playerState.characterId=null;section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
+ hotkeyHandler=null;mapRequest++;playerRequest++;playerState.status='idle';playerState.medalStatus='idle';playerState.rows=[];playerState.characterId=null;playerState.medalCharacterId=null;ui.medalManual=false;ui.odBuild=false;section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
  root?.remove();root=null;
 }
