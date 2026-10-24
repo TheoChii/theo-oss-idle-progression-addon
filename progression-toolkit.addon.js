@@ -1,7 +1,7 @@
-/* Theo's oss!idle Progression Toolkit v0.4.4 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.5 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
-const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
+const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,staminaUpgrades:0,warmMapMinutes:4,warmPhysicalShare:40,warmGapMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
 let data={...A},root=null,tab='Improvement',section='Calculators',hotkeyHandler=null;
 const val=k=>Math.max(0,+data[k]||0),fmt=(v,d=2)=>Number.isFinite(v)?v.toLocaleString('en-US',{maximumFractionDigits:d}):'—';
 function cb(x0,y0,x1,y1){let ax=1-(x1=3*(x1-x0)-(x0*=3))-x0,ay=1-(y1=3*(y1-y0)-(y0*=3))-y0;return t=>{if(t<=0)return 0;if(t>=1)return 1;let r=t,s=0,d=1,x;for(let i=0;i<32;i++){x=r*(r*(r*ax+x1)+x0)-t;if(Math.abs(x)<1e-5)break;let dv=r*(r*ax*3+x1*2)+x0;if(Math.abs(dv)<1e-5)break;r-=x/dv;}if(r<0||r>1){r=t;for(let i=0;i<60;i++){x=r*(r*(r*ax+x1)+x0);if(Math.abs(x-t)<1e-5)break;if(t>x)s=r;else d=r;r=(d+s)/2;}}return r*(r*(r*ay+y1)+y0);};}
@@ -259,6 +259,48 @@ const afterFatigue=(current,duration,physicalShare)=>{
  const strain=strainedMinutes(duration,physicalShare);
  return Math.min(FATIGUE_CAP,Math.max(0,current+strain-FATIGUE_REST_RATE*(Math.max(0,duration)-strain)));
 };
+/** Warm-up as implemented in oss!idle shared/fatigue.ts (2026-10-24).
+ * Based on accumulated strained minutes; affects gameplay only, never direct XP. */
+const WARM_MINUTES=90,WARM_LADDER=10,WARM_SPEED=.1,WARM_HOLD=3,WARM_DECAY=.7;
+const WARM_HALF=300,WARM_COLD=360;
+const warmGear=upgrades=>{
+ const u=Math.max(0,Math.floor(Number(upgrades)||0)),tiers=Math.max(0,u-WARM_LADDER);
+ return Math.min(u,WARM_LADDER)+(1-WARM_DECAY**tiers)/(1-WARM_DECAY);
+};
+const warmRange=upgrades=>{
+ const g=warmGear(upgrades),cold=Math.min(WARM_COLD+g*WARM_HOLD,FATIGUE_CAP);
+ const half=Math.min(WARM_HALF+g*WARM_HOLD,cold),peakEnd=Math.min(WARM_MINUTES+g*WARM_HOLD,half);
+ return {peakStart:Math.min(WARM_MINUTES/(1+g*WARM_SPEED),peakEnd),peakEnd,half,cold};
+};
+const warmEase=(m,from,to)=>to>from?cb(.4,0,.6,1)((m-from)/(to-from)):Number(m>=to);
+const warmup=(minutes,upgrades=0)=>{
+ const {peakStart,peakEnd,half,cold}=warmRange(upgrades),m=Math.max(0,Math.min(FATIGUE_CAP,Number(minutes)||0));
+ if(m<peakStart)return warmEase(m,0,peakStart);
+ if(m<half)return 1-.5*warmEase(m,peakEnd,half);
+ return .5*(1-warmEase(m,half,cold));
+};
+/** Earliest estimated start-of-play peak for a strategy; short final map permitted. */
+function warmPlan(start,upgrades,mapMinutes,physicalShare,breakMinutes){
+ const {peakStart,peakEnd}=warmRange(upgrades);
+ const initial=Math.max(0,Math.min(FATIGUE_CAP,Number(start)||0));
+ const duration=Math.max(.1,Number(mapMinutes)||0),gap=Math.max(0,Number(breakMinutes)||0);
+ if(initial>=peakStart&&initial<=peakEnd)return {kind:'ready',plays:0,minutes:0,last:0};
+ if(initial>peakEnd)return {kind:'cooldown',plays:0,minutes:(initial-peakEnd)/FATIGUE_REST_RATE,last:0};
+ const fraction=Math.min(1,Math.max(0,(Number(physicalShare)||0)/40));
+ const rate=fraction-FATIGUE_REST_RATE*(1-fraction);
+ if(rate<=0)return {kind:'impossible',plays:0,minutes:Infinity,last:0};
+ let strained=initial,elapsed=0;
+ for(let n=1;n<=5000;n++){
+   const need=(peakStart-strained)/rate;
+   if(need<=duration+1e-8)return {kind:'play',plays:n,minutes:elapsed+Math.max(0,need),last:Math.max(0,need)};
+   strained=Math.min(FATIGUE_CAP,Math.max(0,strained+duration*rate));
+   elapsed+=duration;
+   if(strained>=peakStart&&strained<=peakEnd)return {kind:'play',plays:n,minutes:elapsed,last:duration};
+   strained=restedMinutes(strained,gap);elapsed+=gap;
+   if(n>2&&rate*duration<=FATIGUE_REST_RATE*gap+1e-8)break;
+ }
+ return {kind:'impossible',plays:0,minutes:Infinity,last:0};
+}
 const farmXP=(physical,memory,affected,block,minute,medal)=>({physical:physical*fatigueXP(minute)*medal,memory:memory*medal,affected:affected*block*medal});
 function farmProjection(count,current,minutes,share,between,physical,memory,affected,repeats,medal){
  let state=Math.max(0,current),rows=[];
@@ -299,6 +341,7 @@ async function loadPlayerStats(){
   data.improveSkill=skill;data.improveCurrent=level;data.improvePrestige=prestige;
   data.improveTarget=level+.1;data.overall=levelFromTotal(character.overallTotalXp);
   data.buyAt=Math.max(level,minLevel(data.upgrades));
+  if(Number.isFinite(Number(character.staminaUpgrades)))data.staminaUpgrades=Math.max(0,Math.floor(Number(character.staminaUpgrades)));
   const characterId=Number(character.id);
   playerState.rows=rows;playerState.characterId=characterId;playerState.name=String(character.name||'Unnamed');playerState.status='ready';
   if(characterId>0&&!Number(character.local)){
@@ -411,7 +454,7 @@ function render(){
  c+=medalSummary(medalBoost);let remaining=Math.max(0,to(110)-xpAt(val('overall'))),plays=Math.ceil(remaining/Math.max(1,val('totalXpPlay')*medalBoost));
  c+=grid([row('XP remaining',fmt(remaining,0)),row('Estimated plays',fmt(plays,0)),row('Total hours',fmt(plays*val('minutes')/60)),row('Days at schedule',fmt(plays*val('minutes')/60/Math.max(1,val('hours')))),row('Full rebirth threshold',fmt(to(110),0))]);
  c+=tbl(['Overall Lv','Cumulative XP'],[100,101,102,103,104,105,106,107,108,109,110].map(n=>[n,fmt(to(n),0)]));
- }else{
+ }else if(tab==='Farming'){
  c+='<p><b>Physical fatigue</b> affects Speed, Stamina and Jack Speed (5–7 strained hours: down to 5% XP). Memory is exempt from fatigue and Mindblock; other skills receive Mindblock. Fatigue rests 0.4 strained minutes per minute; 40% physical note strain means full strain.</p>'+
  grid([field('physical','Physical XP/play before medals'),field('memory','Memory XP/play before medals'),field('affected','Other skills XP/play before medals'),field('repeats','Prior same-map plays'),
  field('fatigueMinutes','Current fatigue (strained minutes)'),field('restMinutes','Rest since last play (minutes)'),
@@ -430,14 +473,38 @@ function render(){
  row('Until full fatigue',fmt(Math.max(0,FATIGUE_FULL-rested),1)+' min','Remaining strained minutes')]);
  c+=tbl(['Upcoming play','Fatigue before','Total XP / play'],projection.map(([play,tired,earned])=>['#'+play,fmt(tired,1)+' min',fmt(earned,0)]));
  c+='<p class="fine">Manual fatigue is accumulated strained minutes, not total session time. XP values are before medals, but may include other bonuses. Projection assumes the same map and strain share, a fixed break between plays, and increasing same-map repetitions. Warm-up affects gameplay, not the direct XP multiplier, but can indirectly change XP earned.</p>';
+
+ }else if(tab==='Warm-up'){
+   const upgrades=Math.floor(val('staminaUpgrades')),initial=restedMinutes(val('fatigueMinutes'),val('restMinutes'));
+   const range=warmRange(upgrades),progress=warmup(initial,upgrades),length=Math.max(.1,val('warmMapMinutes')),share=val('warmPhysicalShare'),gap=val('warmGapMinutes');
+   c+='<p><b>🔥 Warm-up Planner</b> — estimate the shortest route to 100% warm-up for Speed, Stamina and Jack Speed. Warm-up affects gameplay performance, not direct XP.</p>';
+   c+=grid([field('staminaUpgrades','Stamina upgrades'),field('fatigueMinutes','Stored strained minutes'),
+      field('restMinutes','Minutes since last play'),field('warmMapMinutes','Typical map duration (min)'),
+      field('warmPhysicalShare','Physical strain share (%)'),field('warmGapMinutes','Break between maps (min)')]);
+   const perfect=warmPlan(initial,upgrades,length,40,0),selected=warmPlan(initial,upgrades,length,share,gap);
+   const display=x=>x.kind==='ready'?'Already warm':x.kind==='impossible'?'Not reachable':fmt(x.minutes,1)+' min';
+   c+=grid([row('Warm-up now',fmt(progress*100,1)+'%',fmt(initial,1)+' stored strained min'),
+      row('Reach full warm-up',fmt(range.peakStart,1)+' min','Peak ends at '+fmt(range.peakEnd,1)),
+      row('Theoretical fastest',display(perfect),'40%+ physical strain · no gaps'),
+      row('Your map strategy',display(selected),selected.kind==='play'?fmt(selected.plays,0)+' plays · last ~'+fmt(selected.last,1)+' min':selected.kind==='cooldown'?'Rest to return to peak':selected.kind==='ready'?'Ready for a peak performance play':'Try harder maps or shorter breaks')]);
+   const profiles=[['Full strain, no gaps',40,0],['Your map profile',share,gap],['Full strain, your breaks',40,gap],['30% physical strain',30,gap],['20% physical strain',20,gap],['10% physical strain',10,gap]];
+   const plans=profiles.map(([name,rate,breaks])=>({name,rate,plan:warmPlan(initial,upgrades,length,rate,breaks)})).sort((a,b)=>a.plan.minutes-b.plan.minutes);
+   c+='<p class="section-label">Warm-up route comparison</p>'+tbl(['Strategy','Time to peak','Plays','Final map'],plans.map((x,i)=>[
+      (i===0?'★ ':'')+safeText(x.name),display(x.plan),x.plan.kind==='play'?fmt(x.plan.plays,0):'—',
+      x.plan.kind==='play'?fmt(x.plan.last,1)+' min':x.plan.kind==='cooldown'?'Rest '+fmt(x.plan.minutes,1)+' min':'—']));
+   c+=grid([row('Full warm-up window',fmt(Math.max(0,range.peakEnd-range.peakStart),1)+' strained min','100% before decline begins'),
+      row('Half warm at',fmt(range.half,1)+' strained min'),
+      row('Cold again at',fmt(range.cold,1)+' strained min'),
+      row('Rest recovery',fmt(FATIGUE_REST_RATE,1)+' strained min/min','Recovery while idle or unstrained')]);
+   c+='<p class="fine">Estimates model the official strain accumulation formula. Full strain means at least 40% of notes strain physical skills; particular maps may have different shares. The final map length is a <b>target</b>, not a command to stop a chart early. Warm-up is assessed at the next play start, not continuously during a map. Fatigue minutes and rest are shared with Farming and require manual entry; Stamina upgrades can auto-fill via Use current player stats. If strain already exceeds peak, resting is faster than harder maps. Warm-up does not directly affect XP.</p>';
  }
  root.shadowRoot.querySelector('#contents').innerHTML=c+'<p class="fine">Read-only calculations. Character stats come from local game saves; medal counts may be fetched from the public oss!idle character profile. No progress changes.</p>';
 }
 export function mount(){
  if(root)return;document.getElementById('theo-oss-idle-toolkit')?.remove();try{const saved=JSON.parse(localStorage.getItem(K)||'{}');data={...data,...saved};if(!Object.hasOwn(saved,'physical')&&Object.hasOwn(saved,'exempt')){data.physical=Math.max(0,Number(saved.exempt)||0);data.memory=0;}}catch{}
  root=document.createElement('div');root.id='theo-oss-idle-toolkit';root.attachShadow({mode:'open'});
- const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:0;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}:host .player-strip{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:9px 10px;background:#242739;border:1px solid #3c4260;border-radius:10px}:host .player-strip .tool-picker{width:180px;flex:1 1 150px}:host .player-strip button{padding:10px 12px;border-radius:7px;white-space:nowrap}:host .player-strip small{flex:1 1 100%;margin-top:0}:host .medal-strip{background:#1e2b37;border:1px solid #3b5162;padding:8px 11px;margin:8px 0 12px;border-radius:9px;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}:host .medal-strip>b{font-size:13px;color:#dbeaff}:host .medal-strip>small{font-size:11px;color:#a9bacd;flex:1}:host details.fold{border:1px solid #3a425e;border-radius:8px;margin:10px 0;background:#202537}:host details.fold summary{cursor:pointer;user-select:none;padding:10px 12px;font-size:12px;color:#c8c7eb;font-weight:650;list-style:disclosure-closed}:host details.fold[open] summary{border-bottom:1px solid #3a425e;list-style:disclosure-open}:host details.fold .grid,:host details.fold label,:host details.fold p,:host details.fold .scroll{margin:10px}:host .medal-strip details.fold{flex:1 1 100%;margin:2px 0 0;border:0;background:transparent}:host .medal-strip details.fold summary{padding:4px 0;font-size:11px}:host .medal-strip details.fold .grid{margin:8px 0}:host .section-label{font-size:12px;color:#ede5ff;font-weight:700;margin-top:15px}:host .scenario-fold .scroll{max-height:260px}:host .panel{width:min(740px,95vw)}:host .metric{padding:9px}:host .metric b{font-size:17px}:host .grid{gap:7px}:host input,:host select{padding:8px}:host .player-tools .grid{margin:6px 0}:host details.fold .tool-picker{margin-bottom:8px}@media(max-width:480px){:host .panel{width:97vw;max-height:90vh}:host .player-strip button{flex:1 1 auto}:host nav button{font-size:10px;padding:9px 1px}:host .metric b{font-size:15px}}';
- root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
+ const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a;overflow-x:auto;scrollbar-width:thin}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:72px;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}:host .player-strip{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:9px 10px;background:#242739;border:1px solid #3c4260;border-radius:10px}:host .player-strip .tool-picker{width:180px;flex:1 1 150px}:host .player-strip button{padding:10px 12px;border-radius:7px;white-space:nowrap}:host .player-strip small{flex:1 1 100%;margin-top:0}:host .medal-strip{background:#1e2b37;border:1px solid #3b5162;padding:8px 11px;margin:8px 0 12px;border-radius:9px;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}:host .medal-strip>b{font-size:13px;color:#dbeaff}:host .medal-strip>small{font-size:11px;color:#a9bacd;flex:1}:host details.fold{border:1px solid #3a425e;border-radius:8px;margin:10px 0;background:#202537}:host details.fold summary{cursor:pointer;user-select:none;padding:10px 12px;font-size:12px;color:#c8c7eb;font-weight:650;list-style:disclosure-closed}:host details.fold[open] summary{border-bottom:1px solid #3a425e;list-style:disclosure-open}:host details.fold .grid,:host details.fold label,:host details.fold p,:host details.fold .scroll{margin:10px}:host .medal-strip details.fold{flex:1 1 100%;margin:2px 0 0;border:0;background:transparent}:host .medal-strip details.fold summary{padding:4px 0;font-size:11px}:host .medal-strip details.fold .grid{margin:8px 0}:host .section-label{font-size:12px;color:#ede5ff;font-weight:700;margin-top:15px}:host .scenario-fold .scroll{max-height:260px}:host .panel{width:min(740px,95vw)}:host .metric{padding:9px}:host .metric b{font-size:17px}:host .grid{gap:7px}:host input,:host select{padding:8px}:host .player-tools .grid{margin:6px 0}:host details.fold .tool-picker{margin-bottom:8px}@media(max-width:480px){:host .panel{width:97vw;max-height:90vh}:host .player-strip button{flex:1 1 auto}:host nav button{font-size:10px;padding:9px 1px}:host .metric b{font-size:15px}}';
+ root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming','Warm-up'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
  root.shadowRoot.addEventListener('click',e=>{
  const b=e.target.closest('button');if(!b)return;
  if(b.classList.contains('close'))root.classList.remove('open');
@@ -483,7 +550,7 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.4. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.5. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
