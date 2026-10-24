@@ -1,4 +1,4 @@
-/* Theo's oss!idle Progression Toolkit v0.4.3 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.4 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
@@ -390,9 +390,15 @@ function render(){
  ]);
  if(u===0)c+='<p class="fine">With 0 upgrades, your stored σ does not add XP by itself. Buying your first upgrade activates the upgrade bonus. Since your level is '+fmt(l)+', comparison rows begin at your current level rather than Lv'+req+'.</p>';
  if(q){
+  // Fixed-rate estimate using the selected purchase level and current boosted XP/play.
+  const plannedXP=Math.max(0,xpAt(choose)-xpAt(l));
+  const plannedPlays=Math.ceil(plannedXP/effectiveXpRate);
   c+='<p class="section-label">Planned upgrade at Lv '+fmt(choose,2)+'</p>';
-  c+=grid([row('Gain', '+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ after'),row('New XP multiplier',fmt(q.newBoost,4)+'×','from '+fmt(currentBoost,4)+'×'),row('Level after purchase',fmt(q.after,3),'Costs '+fmt(q.cost,0)+' XP')]);
-  c+='<p class="fine">XP until purchase: '+fmt(Math.max(0,xpAt(choose)-xpAt(l)),0)+' (about '+fmt(Math.ceil(Math.max(0,xpAt(choose)-xpAt(l))/effectiveXpRate),0)+' plays at this rate)</p>';
+  c+=grid([row('Gain','+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ after'),
+    row('New XP multiplier',fmt(q.newBoost,4)+'×','from '+fmt(currentBoost,4)+'×'),
+    row('Level after purchase',fmt(q.after,3),'Costs '+fmt(q.cost,0)+' XP'),
+    row('Plays to planned upgrade',fmt(plannedPlays,0),'At '+fmt(effectiveXpRate,0)+' boosted XP/play')]);
+  c+='<p class="fine">XP until planned upgrade: '+fmt(plannedXP,0)+' · assumes the current boosted XP/play rate stays constant.</p>';
  }
  const candidates=[earliest,earliest+.1,earliest+.25,earliest+.5,earliest+1,earliest+2,choose],unique=[...new Set(candidates.map(n=>+n.toFixed(4)))].sort((a,b)=>a-b);
  let rows=[];for(const n of unique){let x=preview(n,u,s,p,medalBoost);if(x)rows.push(['Lv'+fmt(n)+(Math.abs(n-choose)<.00001?' ★':''),'+'+fmt(x.add)+'σ',fmt(x.newSigma)+'σ',fmt(x.newBoost,4)+'×',fmt(Math.max(0,xpAt(n)-xpAt(l)),0)]);}if(rows.length)c+='<details class="fold scenario-fold"><summary>Compare '+rows.length+' purchase levels</summary>'+tbl(['Buy at','Earn σ','Total σ','XP boost','XP to wait'],rows)+'</details>';
@@ -477,7 +483,7 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.3. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.4. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
