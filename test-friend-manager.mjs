@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const source=await fs.readFile(new URL('./progression-toolkit.addon.js',import.meta.url),'utf8');
-assert(source.includes('v0.4.7'));
+assert(source.includes('v0.4.8'));
 const mod=await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport {friendState,friendPause,friendId,FRIEND_DELAY_MS,FRIEND_QUEUE_LIMIT};').toString('base64'));
 const {friendState,friendPause,friendId,FRIEND_DELAY_MS,FRIEND_QUEUE_LIMIT}=mod;
 assert.equal(friendId('5'),5);
@@ -17,6 +17,7 @@ globalThis.document={getElementById:()=>null,
  body:{appendChild(panel){panels.push(panel)}}};
 const requests=[];
 const followers=[{userId:4,name:'Previous friend'}];
+const missingUsers=new Set([999]);
 let putError=null;
 globalThis.fetch=async(url,opts={})=>{
  requests.push({url,opts});
@@ -29,6 +30,16 @@ globalThis.fetch=async(url,opts={})=>{
   {userId:4,character:{name:'Existing'}},
   {userId:5,character:{name:'Alice <test>'}},
   {userId:6,character:{name:'Bob'}}]};
+ if(/^\/v1\/characters\/\d+$/.test(path)){
+  const id=Number(path.split('/').at(-1));
+  if(id===999)return {ok:false,status:404,json:async()=>({message:'Character not found'})};
+  return {ok:true,json:async()=>({id,userId:id===9?8:id,name:'Profile #'+id})};
+ }
+ if(/^\/v1\/users\/\d+$/.test(path)){
+  const id=Number(path.split('/').at(-1));
+  if(missingUsers.has(id))return {ok:false,status:404,json:async()=>({message:'User not found'})};
+  return {ok:true,json:async()=>({id,username:'Account '+id})};
+ }
  if(path.startsWith('/v1/social/friends/')&&opts.method==='PUT') {
   if(putError)return {ok:false,status:429,json:async()=>({error:putError})};
   return {ok:true,json:async()=>({mutual:false})};
@@ -66,7 +77,7 @@ checkPlayer(4,true);checkPlayer(5,true);checkPlayer(6,true);
 clickAction('queue-selected');
 assert.deepEqual(friendState.queue.map(x=>x.id),[5,6],'exclude already followed');
 input('ids','6, 7, 7, 2');
-clickAction('queue-ids');
+clickAction('queue-ids');await settle();
 assert.deepEqual(friendState.queue.map(x=>x.id),[5,6,7],'deduplicate and exclude self');
 clickAction('start');await settle();
 assert.equal(putCalls().length,0,'no account writes before user approval');
@@ -105,9 +116,30 @@ assert.equal(putCalls().length,4);
 assert.equal(friendState.queue.length,0);
 assert.equal(friendState.sent,3);
 assert.equal(friendState.running,false);
+// Profile URLs resolve to the owning ACCOUNT, not the character ID.
+input('ids','https://oss.idle.rhythmgamers.net/web/c/9 999');
+clickAction('queue-ids');await settle();
+assert.deepEqual(friendState.queue.map(x=>x.id),[8]);
+assert(friendState.error.includes('Character not found'),'bad profile link is rejected');
+assert(!putCalls().some(x=>x.url.endsWith('/friends/9')),'never add profile ID as account ID');
+// Explicit account-ID mode does NOT rewrite valid account numbers.
+handlers.change({target:{dataset:{},value:'account',hasAttribute:key=>key==='data-friend-id-type'},stopPropagation(){}});
+input('ids','17, 999');
+clickAction('queue-ids');await settle();
+assert.deepEqual(friendState.queue.map(x=>x.id),[8,17]);
+assert(friendState.error.includes('User not found'),'invalid account must be rejected before queueing');
+// If a queued user disappears between lookup and approval, skip them without a PUT.
+missingUsers.add(8);
+approve(true);clickAction('start');await settle();
+// Existing cooldown still applies before validating the next queued account.
+tick();await settle();
+assert.equal(friendState.skipped,1);
+assert(!putCalls().some(x=>x.url.endsWith('/friends/8')),'invalid account skipped before PUT');
+assert(friendState.queue.length===0);
+assert(putCalls().some(x=>x.url.endsWith('/friends/17')),'later valid accounts still processed');
 mod.unmount();
 assert.equal(friendState.ready,false);
 globalThis.setTimeout=realSetTimeout;
 globalThis.clearTimeout=realClearTimeout;
 Date.now=realNow;
-console.log('PASS: explicit-selected friend queue, auth, duplicates, 6.5-second pacing, pause, 429 stop, no messaging and cleanup');
+console.log('PASS: character-to-account resolution, preflight 404 skip, name search, auth, pacing, pause, 429 stop, no messaging and cleanup');

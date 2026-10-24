@@ -22,7 +22,21 @@ Discovery uses oss!idle's read-only local SQL database bridge and the downloaded
 - **Warm-up Planner:** models the official v1.2.2 warm-up curve for Speed, Stamina and Jack Speed. Uses your Stamina upgrade count and current stored strained minutes (shared with Farming), simulates different physical strain percentages and breaks, and compares play count/time to first 100% warm-up. Shows peak window and when resting is optimal after overshooting. Strain shares are estimated; an individual map’s physical strain cannot be known from the add-on’s current local data. Warm-up improves gameplay only, not direct XP.
 - **Current stats button:** read a character's saved skill level (including partial XP), upgrades, Overdrive, prestige and overall level from the local game database. Choose the character and skill; no progression writes. For online characters, it also fetches the earned medal list from the game's **public, read-only** character-medals endpoint.
 - **Medals:** automatically classify all 148 currently defined medal IDs into Bronze, Silver, Gold, Platinum and Divine tiers when you load an online character. Each medal compounds its XP bonus (0.25%, 0.5%, 1%, 2% and 3% respectively). Manual fallback remains available for guests, offline use and service errors. Unknown future medals are reported, not guessed.
-- **New in v0.4.6:** adds five friendship/follower medals (1, 5, 25, 100, 1,000), six mapper medals (1, 2, 5, 10, 50, 100), and two secret medals (fail-10s and parallax). The server awards friend medals for distinct other accounts that add your account (incoming followers), not how many accounts you add. This add-on never sends friend requests.
+- **New in v0.4.6:** adds five friendship/follower medals (1, 5, 25, 100, 1,000), six mapper medals (1, 2, 5, 10, 50, 100), and two secret medals (fail-10s and parallax). The server awards friend medals for distinct other accounts that add your account (incoming followers), not how many accounts you add. (At v0.4.6, the toolkit had no friend-request feature; v0.4.7 and later have an explicitly approved opt-in Friend Manager.)
+
+## v0.4.8 — Fixing "User not found (HTTP 404)"
+
+An oss!idle **character ID** from the web profile (for example /web/c/123)
+is **not** necessarily the account/user ID that the game's Friend API accepts.
+In v0.4.7 pasted numeric IDs were assumed to be account IDs, causing avoidable
+404 responses on friend adds. v0.4.8 resolves pasted character IDs or official
+character-profile links to the owning account through the game's public API
+before queueing, and optionally accepts explicitly selected account IDs.
+Previously queued IDs are not retained after a restart, so review a new queue.
+
+Before each authenticated add, the manager now verifies the account exists
+and skips invalid accounts with a specific error. All requests still require
+manually selecting and confirming the batch; no automatic messaging.
 
 ## Optional Friend Manager — explicit account actions
 
@@ -33,8 +47,9 @@ does not begin automatically, and does not send any messages.
 1. Open **Friends** and choose **Verify login & refresh friends**. The panel checks your
    signed-in account, displays incoming followers and reads your outgoing friend list.
 2. Search specific players by character name. Select the accounts you want, then
-   choose **Queue selected players**. You can also paste numeric account IDs
-   (not character IDs) in the advanced import box.
+   choose **Queue selected players**. You can also paste character-profile links or numeric **character IDs**
+   (resolved to account IDs automatically). For true account IDs, change the
+   selector to **Account / osu! user ID**.
 3. Review the queue (maximum 100 accounts at once) and check the approval box.
    Click **Start adds**. Each outgoing PUT /v1/social/friends/{userId}
    request is at least 6.5 seconds after the previous success — under 10 per minute.
@@ -47,8 +62,12 @@ The only API origin used is the official https://api.oss.idle.rhythmgamers.net.
 Requests use your active game session: browser session cookies or the desktop
 client's live bearer token (kept in memory for the request and never logged,
 stored, or transmitted elsewhere). Search and follower refresh are GET requests.
-Queued player IDs are held in memory, not uploaded to another service or
-stored persistently. The social PUT requests are sent only after explicit
+For pasted character profiles, the toolkit calls GET /v1/characters/{id} to resolve
+its owning account ID, and for account IDs calls GET /v1/users/{id}. Before
+sending a friend-add PUT it checks the account still exists. Invalid IDs are
+skipped with an explanation rather than repeatedly retried. Queued player IDs
+are held in memory, not uploaded to another service or stored persistently.
+The social PUT requests are sent only after explicit
 batch approval. Please respect the game's current community rules and avoid
 unwanted interactions. Game/server limits can be stricter than this client's
 pacing and always take precedence.
@@ -64,9 +83,9 @@ This repository now supports oss!idle's **Built from a git repository** add-on t
 2. Enter the public repository URL: **https://github.com/TheoChii/theo-oss-idle-progression-addon**.
 3. Save the add-on and copy the **webhook URL generated by oss!idle**.
 4. On GitHub, open **Settings → Webhooks → Add webhook** for this repository. Paste that URL as the **Payload URL**; use **application/json**, select **Just the push event**, and keep it active.
-5. The repository has a version-tag release at `v0.4.7`. The game should pick up the newest version when its build queue runs. Check the build log and then **install/enable** the built add-on (and submit it for review if the game requires that).
+5. The repository has a version-tag release at `v0.4.8`. The game should pick up the newest version when its build queue runs. Check the build log and then **install/enable** the built add-on (and submit it for review if the game requires that).
 
-For future updates, commit to `main` and push a **new version tag** (for example `v0.4.8`). Untagged edits to `main` are **not** new releases. The webhook URL belongs to your specific in-game add-on, so do not post it publicly.
+For future updates, commit to `main` and push a **new version tag** (for example `v0.4.9`). Untagged edits to `main` are **not** new releases. The webhook URL belongs to your specific in-game add-on, so do not post it publicly.
 
 ### Manual fallback
 
@@ -75,7 +94,7 @@ To install by pasted code instead, copy the self-contained [source module](progr
 Press **Ctrl+Shift+P** in game to open or close the toolkit; **Esc** closes its panel.
 
 
-## XP input conventions (v0.4.7)
+## XP input conventions (v0.4.8)
 
 - **Overdrive and Prestige:** `Base skill XP/play` means XP **before** upgrades, Overdrive, prestige and medals; the toolkit multiplies all of these automatically when estimating plays.
 - **Rebirth and Farming:** XP/play inputs should be **before medal bonuses**. For Rebirth, include any other boosts already present in your total XP rate. Farming splits the rates into **physical** (Speed, Stamina, Jack Speed), **Memory**, and **other skills**, with any other boosts already included as appropriate.

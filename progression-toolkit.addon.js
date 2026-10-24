@@ -1,4 +1,4 @@
-/* Theo's oss!idle Progression Toolkit v0.4.7 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.8 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Calculators read-only. Optional Friend Manager writes only after explicit approval. AGPL-3.0-only. */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,staminaUpgrades:0,warmMapMinutes:4,warmPhysicalShare:40,warmGapMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
@@ -396,7 +396,7 @@ const FRIEND_API='https://api.oss.idle.rhythmgamers.net/v1';
 const FRIEND_DELAY_MS=6500; // strictly fewer than 10 write requests in any 60s span
 const FRIEND_QUEUE_LIMIT=100;
 const friendState={query:'',idText:'',results:[],selected:new Set(),queue:[],followed:new Set(),
- accountId:null,followers:null,ready:false,loading:false,running:false,approved:false,
+ accountId:null,followers:null,idType:'character',ready:false,loading:false,running:false,approved:false,
  sent:0,skipped:0,error:'',message:''};
 let friendEpoch=0,friendTimer=null,friendWake=null,friendNextAllowedAt=0;
 const friendId=n=>{
@@ -424,8 +424,11 @@ async function friendRequest(path,options={}){
   credentials:auth.credentials,signal:options.signal||(typeof AbortSignal!=='undefined'&&AbortSignal.timeout?AbortSignal.timeout(15000):undefined)});
  if(!response.ok){
   const detail=await response.json().catch(()=>({}));
-  const message=typeof detail?.error==='string'?detail.error:'HTTP '+response.status;
-  throw Error(response.status===429?'Rate limit reached: stopped (no retry).':message+' (HTTP '+response.status+')');
+  const message=typeof detail?.error==='string'?detail.error:typeof detail?.message==='string'?detail.message:'Request failed';
+  const why=response.status===429?'Rate limit reached: stopped (no retry).':message+' (HTTP '+response.status+')';
+  const error=Error((options.method||'GET')+' '+path+': '+why);
+  error.status=response.status;
+  throw error;
  }
  return response.json();
 }
@@ -486,13 +489,53 @@ function friendAddQueue(items){
  friendState.message='Queued '+added+' new account(s). Review the queue before starting.';
  renderFriends();
 }
-function friendImportIds(){
- const items=friendState.idText.split(/[\s,;]+/).filter(Boolean).slice(0,FRIEND_QUEUE_LIMIT+1);
- const invalid=items.filter(n=>!friendId(n));
- if(invalid.length){friendState.error='Use numeric oss!idle ACCOUNT IDs (not character IDs or profile URLs).';renderFriends();return;}
- friendState.error='';
- friendAddQueue(items.map(id=>({id:Number(id)})));
- friendState.idText='';
+/** /web/c/:id is a character profile, NOT an account ID. */
+function friendParseTarget(value,type='character'){
+ const raw=String(value).trim();
+ let url;
+ if(/^https?:\/\//i.test(raw)){
+  try{url=new URL(raw);}catch{throw Error('Invalid profile link.');}
+  if(url.protocol!=='https:'||url.hostname!=='oss.idle.rhythmgamers.net')throw Error('Use an official oss!idle character-profile link.');
+  const match=url.pathname.match(/^\/(?:web\/)?c\/(\d+)\/?$/);
+  if(!match)throw Error('Expected a character profile ending in /c/123.');
+  return {id:friendId(match[1]),type:'character'};
+ }
+ const local=raw.match(/^\/?(?:web\/)?c\/(\d+)\/?$/);
+ if(local)return {id:friendId(local[1]),type:'character'};
+ if(!/^\d+$/.test(raw))throw Error('Enter numeric IDs or character-profile links.');
+ return {id:friendId(raw),type};
+}
+/** Resolve every pasted target before queueing; no unverified IDs are added. */
+async function friendImportIds(){
+ if(friendState.loading||friendState.running||!friendState.ready)return;
+ const items=friendState.idText.split(/[\s,;]+/).filter(Boolean);
+ if(items.length>FRIEND_QUEUE_LIMIT){friendState.error='Limit input to '+FRIEND_QUEUE_LIMIT+' entries per batch.';renderFriends();return;}
+ if(!items.length){friendState.error='Paste a profile link or player ID first.';renderFriends();return;}
+ friendState.loading=true;friendState.error='';friendState.message='';
+ const epoch=friendEpoch;
+ renderFriends();
+ const resolved=[],rejected=[],seen=new Set();
+ try{
+  for(const input of items){
+   if(epoch!==friendEpoch||!root)return;
+   try{
+    const target=friendParseTarget(input,friendState.idType);
+    if(!target.id)throw Error('ID must be a positive integer.');
+    const result=await friendRequest(target.type==='character'?'/characters/'+target.id:'/users/'+target.id);
+    if(epoch!==friendEpoch||!root)return;
+    const id=friendId(target.type==='character'?result.userId:result.id);
+    if(!id)throw Error('No owning account was returned.');
+    if(seen.has(id)||id===friendState.accountId||friendState.followed.has(id))continue;
+    seen.add(id);
+    resolved.push({id,name:String(target.type==='character'?result.name||'Character #'+target.id:result.username||'Account #'+id)});
+   }catch(e){rejected.push(input+': '+(e?.message||String(e)));}
+  }
+  if(epoch!==friendEpoch||!root)return;
+  friendAddQueue(resolved);
+  friendState.error=rejected.length?'Not queued ('+rejected.length+'): '+rejected.slice(0,3).join(' · ')+(rejected.length>3?' · …':''):'';
+  if(resolved.length)friendState.idText='';
+  friendState.message='Validated '+resolved.length+' account(s) before queueing. '+(rejected.length?rejected.length+' entry/entries could not be resolved.':'');
+ }finally{friendState.loading=false;renderFriends();}
 }
 function friendGap(ms){
  return new Promise(resolve=>{
@@ -521,8 +564,31 @@ async function friendStart(){
    const wait=Math.max(0,friendNextAllowedAt-Date.now());
    if(wait)await friendGap(wait);
    if(run!==friendEpoch)break;
+   // The game can return 404 for a character ID, closed account or invalid account.
+   // Check the user route before using an authenticated write.
+   try{
+    const verified=await friendRequest('/users/'+target.id);
+    if(friendId(verified.id)!==target.id)throw Error('Account lookup mismatch for #'+target.id);
+   }catch(e){
+    if(e?.status===404){
+     friendState.skipped++;friendState.queue.shift();
+     friendState.message='Skipped '+target.name+' (#'+target.id+'): account not found. Use a character-profile link or player-name search instead.';
+     friendState.error=friendState.message;
+     renderFriends();continue;
+    }
+    throw e;
+   }
+   if(run!==friendEpoch)break;
    try{await friendRequest('/social/friends/'+target.id,{method:'PUT'});}
-   finally{friendNextAllowedAt=Date.now()+FRIEND_DELAY_MS;}
+   catch(e){
+    if(e?.status===404){
+     friendState.skipped++;friendState.queue.shift();
+     friendState.message='Skipped '+target.name+' (#'+target.id+'): account disappeared or is unavailable. No friend added.';
+     friendState.error=friendState.message;
+     renderFriends();continue;
+    }
+    throw e;
+   }finally{friendNextAllowedAt=Date.now()+FRIEND_DELAY_MS;}
    // PUT can succeed even when the user presses Stop during the request.
    friendState.followed.add(target.id);friendState.sent++;friendState.queue.shift();
    if(run!==friendEpoch)break;
@@ -557,10 +623,11 @@ function renderFriends(){
  '<div class="friend-controls"><label>Find players by name<input type="text" data-friend-input="search" maxlength="32" placeholder="Exact or partial player name" value="'+safeText(friendState.query)+'"></label>'+
  '<button class="action-button" data-friend-action="search"'+disabled+'>Search players</button></div>'+
  (friendState.results.length?'<p class="fine">Select players below (none selected automatically).</p><div class="friend-results">'+results+'</div><p><button class="action-button" data-friend-action="queue-selected"'+disabled+'>Queue selected players</button></p>':'')+
- '<details class="fold"><summary>Have account IDs? Add them to the queue</summary>'+
- '<p class="fine">Paste comma/space-separated numeric <b>account IDs</b>, not character IDs. You can search names above instead.</p>'+
- '<label>Account IDs<textarea data-friend-input="ids" rows="3" placeholder="123, 456, 789">'+safeText(friendState.idText)+'</textarea></label>'+
- '<p><button class="action-button" data-friend-action="queue-ids"'+disabled+'>Queue these IDs</button></p></details>'+
+ '<details class="fold"><summary>Paste character profiles or player IDs</summary>'+
+ '<p class="fine">Profile links and numeric <b>character IDs</b> are resolved to their owning account before queueing. If your numbers are actual account IDs, switch the selector below. Unrecognized players are not added.</p>'+
+ '<label>Type of bare numeric IDs<select data-friend-id-type'+(busy?' disabled':'')+'><option value="character"'+(friendState.idType==='character'?' selected':'')+'>Character ID (from profile URL)</option><option value="account"'+(friendState.idType==='account'?' selected':'')+'>Account / osu! user ID</option></select></label>'+
+ '<label>Player profiles or IDs<textarea data-friend-input="ids" rows="3" placeholder="https://oss.idle.rhythmgamers.net/web/c/123 or 123, 456">'+safeText(friendState.idText)+'</textarea></label>'+
+ '<p><button class="action-button" data-friend-action="queue-ids"'+disabled+'>Resolve & queue players</button></p></details>'+
  '<p class="section-label">Reviewed queue · '+friendState.queue.length+' / '+FRIEND_QUEUE_LIMIT+'</p>'+
  (friendState.queue.length?'<div class="friend-queue">'+tbl(['#','Player','Account ID'],rows)+'</div>':'<p class="fine">Queue is empty.</p>')+
  '<p class="checkline"><label><input type="checkbox" data-friend-approve'+(friendState.approved?' checked':'')+(busy?' disabled':'')+'> I chose these players and approve this batch of friend additions.</label></p>'+
@@ -706,7 +773,7 @@ export function mount(){
   if(action==='refresh')void friendRefresh();
   if(action==='search')void friendSearch();
   if(action==='queue-selected')friendAddQueue(friendState.results.filter(x=>friendState.selected.has(x.id)));
-  if(action==='queue-ids')friendImportIds();
+  if(action==='queue-ids')void friendImportIds();
   if(action==='start')void friendStart();
   if(action==='pause')friendPause('Stopped by you. Refresh before restarting.');
   if(action==='clear'&&!friendState.running){friendState.queue=[];friendState.approved=false;renderFriends();}
@@ -715,6 +782,10 @@ export function mount(){
 });
  root.shadowRoot.addEventListener('toggle',e=>{if(e.target?.dataset?.setting in ui)ui[e.target.dataset.setting]=e.target.open;},true);
  root.shadowRoot.addEventListener('change',e=>{
+  if(e.target.hasAttribute?.('data-friend-id-type')){
+   if(e.target.value==='character'||e.target.value==='account')friendState.idType=e.target.value;
+   e.stopPropagation();return;
+  }
   const pick=e.target.dataset?.friendPick;
   if(pick){const id=friendId(pick);if(id){if(e.target.checked)friendState.selected.add(id);else friendState.selected.delete(id);}e.stopPropagation();return;}
   if(e.target.hasAttribute?.('data-friend-approve')){friendState.approved=Boolean(e.target.checked);renderFriends();e.stopPropagation();return;}
@@ -750,7 +821,7 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();friendPause('Stopped when toolkit closed.');root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.7. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.8. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  friendPause('Stopped: add-on unloaded.');
