@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 const source = await fs.readFile(new URL('./progression-toolkit.addon.js', import.meta.url), 'utf8');
-assert(source.includes('v0.4.2'));
+assert(source.includes('v0.4.3'));
 assert(source.includes("['Calculators','Discovery']"), 'Discovery section must be retained');
 const mod = await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport { MEDAL_RATES, medals, boost, preview, xpAt, to, cb };').toString('base64'));
 const { MEDAL_RATES, medals, boost, preview, xpAt, to, cb } = mod;
@@ -49,7 +49,7 @@ function metric(name){
 function expectedDisplay(v,d=4){return Number(v.toLocaleString('en-US',{maximumFractionDigits:d}).replaceAll(',',''));}
 let html=tab('Overdrive');
 assert(html.includes('Bronze medals')&&html.includes('Divine medals'));
-approx(metric('Medal XP multiplier'),expectedDisplay(m),'medal card');
+assert(html.includes('🏅 Medals '+m.toLocaleString('en-US',{maximumFractionDigits:4})+'×'),'compact medal summary');
 approx(metric('Current multiplier'),expectedDisplay(boost(9,15,1,m)),'overdrive multiplier display');
 assert.equal(metric('Plays to unlock'),Math.ceil((xpAt(100)-xpAt(90))/(30000*boost(9,15,1,m))));
 html=tab('Prestige');
