@@ -14,21 +14,29 @@ Discovery uses oss!idle's read-only local SQL database bridge and the downloaded
 ## Features
 
 - **Skill Improvement:** compare real XP levels and prestige bonuses across all 11 skills using internal scaling and skill formulas.
-- **Overdrive (σ):** preview delayed upgrade purchases and XP multipliers. The summary shows plays until unlock, σ from buying now, or the next prestige slot when maxed.
+- **Overdrive (σ):** preview delayed upgrade purchases and XP multipliers, including compounded medal bonuses. The summary still shows plays until unlock, σ from buying now, or the next prestige slot when maxed.
 - **Prestige:** see reset effects, permanent bonuses, and the next prestige requirement.
 - **Rebirth:** estimate progress toward Overall Lv110.
-- **Farming:** estimate experience rates and the Mindblock penalty.
+- **Farming:** estimate experience rates and the Mindblock penalty, then apply medal bonuses.
+- **Medals:** manually enter Bronze, Silver, Gold, Platinum and Divine medal counts. Each earned medal compounds its XP bonus (0.25%, 0.5%, 1%, 2% and 3% respectively); the resulting multiplier stacks separately with upgrades, Overdrive and prestige.
 
 **Only one file needs to be installed:** [`progression-toolkit.addon.js`](progression-toolkit.addon.js). No backend or build process is required.
 
 ## Install in oss!idle
 
 1. Open **Options → Add-ons → Manage** and create an add-on draft.
-2. Paste the full contents of `progression-toolkit.addon.js` into the game's **Code** editor (version **0.4.0**).
+2. Paste the full contents of `progression-toolkit.addon.js` into the game's **Code** editor (version **0.4.1**).
 3. Save the draft, then **Install** and **Enable** it.
 4. With the game window focused, press **Ctrl+Shift+P** to open or close the toolkit. Press **Esc** to close it.
 
 **Updating an installed private draft:** Saving edited draft code does not automatically replace the installed local copy. Disable and uninstall **only the locally installed toolkit** (do not delete your draft), save the updated code to the draft, then install it again.
+
+## XP input conventions (v0.4.1)
+
+- **Overdrive and Prestige:** `Base skill XP/play` means XP **before** upgrades, Overdrive, prestige and medals; the toolkit multiplies all of these automatically when estimating plays.
+- **Rebirth and Farming:** XP/play inputs should be **before medal bonuses**. For Rebirth, include any other boosts already present in your total XP rate. For Farming, include any other boosts in the exempt/affected skill rates as appropriate.
+- If a supplied rate already includes medals, divide it by the displayed medal multiplier first so the bonus is not applied twice.
+- Medal counts are saved locally in the toolkit's settings; the calculator does not fetch them from your account. Medal boosts are estimates assuming no new medals are earned during the forecast.
 
 ## Safety and limitations
 
@@ -49,6 +57,7 @@ node --check progression-toolkit.addon.js
 node test-addon-hotkey.mjs
 node test-skill-improvement.mjs
 node test-overdrive-layout.mjs
+node test-medal-bonuses.mjs
 node test-map-discovery.mjs
 ```
 
