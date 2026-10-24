@@ -126,4 +126,4 @@ click({section:'Calculators'});
 assert.equal(mounted.dataset.section,'calculators');
 assert(contents.innerHTML.includes('All 11 skills'));
 mod.unmount();
-console.log('PASS: two sections, read-only database and IndexedDB, character switch, local history, search, stars, mode, input safety, refresh, calculators');
+console.log('PASS: calculator, discovery and friend sections; read-only database and IndexedDB, character switch, local history, search, stars, mode, input safety, refresh, calculators');

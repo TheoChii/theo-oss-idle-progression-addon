@@ -1,6 +1,6 @@
-/* Theo's oss!idle Progression Toolkit v0.4.6 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.7 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
-   Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
+   Calculators read-only. Optional Friend Manager writes only after explicit approval. AGPL-3.0-only. */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,staminaUpgrades:0,warmMapMinutes:4,warmPhysicalShare:40,warmGapMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
 let data={...A},root=null,tab='Improvement',section='Calculators',hotkeyHandler=null;
 const val=k=>Math.max(0,+data[k]||0),fmt=(v,d=2)=>Number.isFinite(v)?v.toLocaleString('en-US',{maximumFractionDigits:d}):'—';
@@ -389,9 +389,194 @@ const medalSummary=m=>{
  return '<div class="medal-strip"><b>🏅 Medals '+fmt(m,4)+'×</b><small>'+status+'</small>'+
  '<details class="fold" data-setting="medalManual"'+(ui.medalManual?' open':'')+'><summary>Medal counts / manual fallback</summary><p class="fine">'+counts+'</p>'+medalFields()+'</details></div>';
 };
+
+/** Optional friend manager. Unlike the calculators, this tool performs account writes
+ * only after a manual batch approval. No messages, bulk discovery or auto-selection. */
+const FRIEND_API='https://api.oss.idle.rhythmgamers.net/v1';
+const FRIEND_DELAY_MS=6500; // strictly fewer than 10 write requests in any 60s span
+const FRIEND_QUEUE_LIMIT=100;
+const friendState={query:'',idText:'',results:[],selected:new Set(),queue:[],followed:new Set(),
+ accountId:null,followers:null,ready:false,loading:false,running:false,approved:false,
+ sent:0,skipped:0,error:'',message:''};
+let friendEpoch=0,friendTimer=null,friendWake=null,friendNextAllowedAt=0;
+const friendId=n=>{
+ const v=Number(n);
+ return Number.isSafeInteger(v)&&v>0?v:null;
+};
+function friendPause(reason='Queue paused.'){
+ friendEpoch++;
+ friendState.running=false;
+ if(friendTimer!==null){clearTimeout(friendTimer);friendTimer=null;}
+ if(friendWake){const done=friendWake;friendWake=null;done();}
+ friendState.approved=false;
+ friendState.message=reason;
+ if(root&&section==='Friends')renderFriends();
+}
+function friendSession(){
+ const desktop=typeof window!=='undefined'&&window.ossIdleDesktop?.isDesktop?window.ossIdleDesktop:null;
+ const token=desktop?.getToken?.();
+ if(desktop&&!token)throw Error('Sign into oss!idle on desktop before adding friends.');
+ return {headers:token?{Authorization:'Bearer '+token}:{},credentials:desktop?'omit':'include'};
+}
+async function friendRequest(path,options={}){
+ const auth=friendSession();
+ const response=await fetch(FRIEND_API+path,{...options,headers:{...auth.headers,...(options.headers||{})},
+  credentials:auth.credentials,signal:options.signal||(typeof AbortSignal!=='undefined'&&AbortSignal.timeout?AbortSignal.timeout(15000):undefined)});
+ if(!response.ok){
+  const detail=await response.json().catch(()=>({}));
+  const message=typeof detail?.error==='string'?detail.error:'HTTP '+response.status;
+  throw Error(response.status===429?'Rate limit reached: stopped (no retry).':message+' (HTTP '+response.status+')');
+ }
+ return response.json();
+}
+async function friendRefresh(){
+ if(friendState.loading||friendState.running)return;
+ friendState.loading=true;friendState.error='';renderFriends();
+ try{
+  const me=await friendRequest('/auth/me');
+  if(!friendId(me.id))throw Error('Log into your oss!idle account first.');
+  const [friends,relation]=await Promise.all([
+   friendRequest('/social/friends'),
+   friendRequest('/social/relation/'+me.id)
+  ]);
+  if(!root)return;
+  if(!Array.isArray(friends))throw Error('Unexpected friend list from game.');
+  const old=friendState.accountId;
+  friendState.accountId=me.id;
+  friendState.followed=new Set(friends.map(f=>friendId(f.userId)).filter(Boolean));
+  friendState.followers=Math.max(0,Number(relation.followers)||0);
+  friendState.ready=true;
+  if(old!==null&&old!==me.id){friendState.queue=[];friendState.selected.clear();}
+  friendState.queue=friendState.queue.filter(x=>x.id!==me.id&&!friendState.followed.has(x.id));
+  friendState.message='Signed in; current follows and incoming follower count refreshed.';
+ }catch(e){friendState.ready=false;friendState.error=e?.message||String(e);}
+ finally{friendState.loading=false;renderFriends();}
+}
+async function friendSearch(){
+ if(friendState.loading||friendState.running)return;
+ const query=friendState.query.trim().slice(0,32);
+ if(!query){friendState.error='Enter a player name to search.';renderFriends();return;}
+ friendState.loading=true;friendState.error='';renderFriends();
+ try{
+  const players=await friendRequest('/characters/search?q='+encodeURIComponent(query));
+  if(!root)return;
+  if(!Array.isArray(players))throw Error('Unexpected player-search response.');
+  const seen=new Set();
+  friendState.results=players.filter(p=>{
+   const id=friendId(p.userId);
+   if(!id||id===friendState.accountId||seen.has(id))return false;
+   seen.add(id);return true;
+  }).map(p=>({id:Number(p.userId),name:String(p.character?.name||'Unnamed')}));
+  friendState.selected.clear();
+  friendState.message=friendState.results.length+' results; choose specific players to queue.';
+ }catch(e){friendState.error=e?.message||String(e);}
+ finally{friendState.loading=false;renderFriends();}
+}
+function friendAddQueue(items){
+ const ids=new Set(friendState.queue.map(x=>x.id));
+ let added=0;
+ for(const item of items){
+  const id=friendId(item.id);
+  if(!id||id===friendState.accountId||friendState.followed.has(id)||ids.has(id))continue;
+  if(friendState.queue.length>=FRIEND_QUEUE_LIMIT)break;
+  const name=String(item.name||'Account #'+id).slice(0,60);
+  friendState.queue.push({id,name});ids.add(id);added++;
+ }
+ friendState.approved=false;
+ friendState.message='Queued '+added+' new account(s). Review the queue before starting.';
+ renderFriends();
+}
+function friendImportIds(){
+ const items=friendState.idText.split(/[\s,;]+/).filter(Boolean).slice(0,FRIEND_QUEUE_LIMIT+1);
+ const invalid=items.filter(n=>!friendId(n));
+ if(invalid.length){friendState.error='Use numeric oss!idle ACCOUNT IDs (not character IDs or profile URLs).';renderFriends();return;}
+ friendState.error='';
+ friendAddQueue(items.map(id=>({id:Number(id)})));
+ friendState.idText='';
+}
+function friendGap(ms){
+ return new Promise(resolve=>{
+  friendWake=resolve;
+  friendTimer=setTimeout(()=>{friendTimer=null;friendWake=null;resolve();},ms);
+ });
+}
+async function friendStart(){
+ if(friendState.running||!friendState.ready||!friendState.approved||!friendState.queue.length)return;
+ friendState.running=true;friendState.approved=false;friendState.error='';
+ const run=++friendEpoch;
+ renderFriends();
+ try{
+  // Re-check the active account and follows before any write.
+  const me=await friendRequest('/auth/me');
+  if(friendId(me.id)!==friendState.accountId)throw Error('Signed-in account changed. Refresh first.');
+  const friends=await friendRequest('/social/friends');
+  if(!Array.isArray(friends))throw Error('Unexpected friend list.');
+  friendState.followed=new Set(friends.map(x=>friendId(x.userId)).filter(Boolean));
+  while(run===friendEpoch&&friendState.queue.length){
+   const target=friendState.queue[0];
+   if(target.id===friendState.accountId||friendState.followed.has(target.id)){
+    friendState.skipped++;friendState.queue.shift();renderFriends();continue;
+   }
+   // Preserve the 6.5s cooldown even if Stop/Start is clicked quickly.
+   const wait=Math.max(0,friendNextAllowedAt-Date.now());
+   if(wait)await friendGap(wait);
+   if(run!==friendEpoch)break;
+   try{await friendRequest('/social/friends/'+target.id,{method:'PUT'});}
+   finally{friendNextAllowedAt=Date.now()+FRIEND_DELAY_MS;}
+   // PUT can succeed even when the user presses Stop during the request.
+   friendState.followed.add(target.id);friendState.sent++;friendState.queue.shift();
+   if(run!==friendEpoch)break;
+   friendState.message='Added '+target.name+' (#'+target.id+'). No message sent.';
+   renderFriends();
+
+  }
+  if(run===friendEpoch)friendState.message='Batch finished. You can ask for follow-backs manually.';
+ }catch(e){if(run===friendEpoch){friendState.error=(e?.message||String(e))+' Queue stopped; refresh before restarting.';}}
+ finally{
+  if(run===friendEpoch)friendState.running=false;
+  renderFriends();
+ }
+}
+function renderFriends(){
+ if(!root||section!=='Friends')return;
+ const busy=friendState.loading||friendState.running;
+ const disabled=busy?' disabled':'';
+ const incoming=friendState.followers;
+ const milestone=[1,5,25,100,1000].find(n=>incoming<n);
+ const remaining=milestone?Math.max(0,milestone-incoming):0;
+ const progress=incoming===null?'Sign in and refresh to see follower medals':milestone?fmt(incoming,0)+' / '+fmt(milestone,0)+' incoming · '+fmt(remaining,0)+' left':'1,000-follower Icon milestone reached!';
+ const results=friendState.results.map(p=>{
+  const followed=friendState.followed.has(p.id);
+  return '<label class="friend-result"><input type="checkbox" data-friend-pick="'+p.id+'"'+(friendState.selected.has(p.id)?' checked':'')+(followed||busy?' disabled':'')+'><span>'+safeText(p.name)+' <small>#'+p.id+(followed?' · already added':'')+'</small></span></label>';
+ }).join('');
+ const rows=friendState.queue.map((x,i)=>[fmt(i+1,0),safeText(x.name),'#'+x.id]);
+ const html='<h3>👥 Friend Manager</h3><p>Only adds players you personally choose. <b>Up to 10 adds/minute</b> (one request every 6.5 seconds). Messaging is always manual. No automatic player scraping or retries after rate limits.</p>'+
+ '<div class="grid">'+row('Incoming followers',incoming===null?'—':fmt(incoming,0),'Other players adding you')+row('Next friendship medal',progress,'Icon requires 1,000 incoming followers')+'</div>'+
+ '<p><button class="action-button" data-friend-action="refresh"'+disabled+'>↻ Verify login & refresh friends</button></p>'+
+ (friendState.ready?'<p class="fine">Account #'+friendState.accountId+' · '+fmt(friendState.followed.size,0)+' players you added</p>':'<p class="fine">Log into the game and refresh before queueing players.</p>')+
+ '<div class="friend-controls"><label>Find players by name<input type="text" data-friend-input="search" maxlength="32" placeholder="Exact or partial player name" value="'+safeText(friendState.query)+'"></label>'+
+ '<button class="action-button" data-friend-action="search"'+disabled+'>Search players</button></div>'+
+ (friendState.results.length?'<p class="fine">Select players below (none selected automatically).</p><div class="friend-results">'+results+'</div><p><button class="action-button" data-friend-action="queue-selected"'+disabled+'>Queue selected players</button></p>':'')+
+ '<details class="fold"><summary>Have account IDs? Add them to the queue</summary>'+
+ '<p class="fine">Paste comma/space-separated numeric <b>account IDs</b>, not character IDs. You can search names above instead.</p>'+
+ '<label>Account IDs<textarea data-friend-input="ids" rows="3" placeholder="123, 456, 789">'+safeText(friendState.idText)+'</textarea></label>'+
+ '<p><button class="action-button" data-friend-action="queue-ids"'+disabled+'>Queue these IDs</button></p></details>'+
+ '<p class="section-label">Reviewed queue · '+friendState.queue.length+' / '+FRIEND_QUEUE_LIMIT+'</p>'+
+ (friendState.queue.length?'<div class="friend-queue">'+tbl(['#','Player','Account ID'],rows)+'</div>':'<p class="fine">Queue is empty.</p>')+
+ '<p class="checkline"><label><input type="checkbox" data-friend-approve'+(friendState.approved?' checked':'')+(busy?' disabled':'')+'> I chose these players and approve this batch of friend additions.</label></p>'+
+ '<div class="friend-actions"><button class="action-button" data-friend-action="start"'+(!friendState.approved||!friendState.ready||!friendState.queue.length||busy?' disabled':'')+'>▶ Start adds (max 10/min)</button>'+
+ '<button class="action-button" data-friend-action="pause"'+(!friendState.running?' disabled':'')+'>■ Stop</button>'+
+ '<button class="action-button" data-friend-action="clear"'+disabled+'>Clear queue</button></div>'+
+ '<p class="fine">Added this session: '+friendState.sent+' · skipped already added: '+friendState.skipped+'. Queue stops when you close the toolkit, change tabs, or disable the add-on.</p>'+
+ (friendState.error?'<p class="notice">'+safeText(friendState.error)+'</p>':'')+
+ (friendState.message?'<p class="fine">'+safeText(friendState.message)+'</p>':'');
+ root.shadowRoot.querySelector('#contents').innerHTML=html;
+}
+
 const tbl=(names,rows)=>'<div class="scroll"><table><thead><tr>'+names.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
 function render(){
  if(section==='Discovery'){renderDiscovery();return;}
+ if(section==='Friends'){renderFriends();return;}
  let c=playerControls(),u=Math.floor(val('upgrades')),p=Math.floor(val('prestige')),s=val('overdrive'),l=val('level'),xpRate=Math.max(1,val('xpPlay')),medalBoost=medals(data),currentBoost=boost(u,s,p,medalBoost),effectiveXpRate=xpRate*currentBoost;
  if(tab==='Improvement'){
  const current=val('improveCurrent'),target=val('improveTarget'),prestige=Math.floor(val('improvePrestige'));
@@ -503,24 +688,36 @@ function render(){
 export function mount(){
  if(root)return;document.getElementById('theo-oss-idle-toolkit')?.remove();try{const saved=JSON.parse(localStorage.getItem(K)||'{}');data={...data,...saved};if(!Object.hasOwn(saved,'physical')&&Object.hasOwn(saved,'exempt')){data.physical=Math.max(0,Number(saved.exempt)||0);data.memory=0;}}catch{}
  root=document.createElement('div');root.id='theo-oss-idle-toolkit';root.attachShadow({mode:'open'});
- const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a;overflow-x:auto;scrollbar-width:thin}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:72px;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}:host .player-strip{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:9px 10px;background:#242739;border:1px solid #3c4260;border-radius:10px}:host .player-strip .tool-picker{width:180px;flex:1 1 150px}:host .player-strip button{padding:10px 12px;border-radius:7px;white-space:nowrap}:host .player-strip small{flex:1 1 100%;margin-top:0}:host .medal-strip{background:#1e2b37;border:1px solid #3b5162;padding:8px 11px;margin:8px 0 12px;border-radius:9px;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}:host .medal-strip>b{font-size:13px;color:#dbeaff}:host .medal-strip>small{font-size:11px;color:#a9bacd;flex:1}:host details.fold{border:1px solid #3a425e;border-radius:8px;margin:10px 0;background:#202537}:host details.fold summary{cursor:pointer;user-select:none;padding:10px 12px;font-size:12px;color:#c8c7eb;font-weight:650;list-style:disclosure-closed}:host details.fold[open] summary{border-bottom:1px solid #3a425e;list-style:disclosure-open}:host details.fold .grid,:host details.fold label,:host details.fold p,:host details.fold .scroll{margin:10px}:host .medal-strip details.fold{flex:1 1 100%;margin:2px 0 0;border:0;background:transparent}:host .medal-strip details.fold summary{padding:4px 0;font-size:11px}:host .medal-strip details.fold .grid{margin:8px 0}:host .section-label{font-size:12px;color:#ede5ff;font-weight:700;margin-top:15px}:host .scenario-fold .scroll{max-height:260px}:host .panel{width:min(740px,95vw)}:host .metric{padding:9px}:host .metric b{font-size:17px}:host .grid{gap:7px}:host input,:host select{padding:8px}:host .player-tools .grid{margin:6px 0}:host details.fold .tool-picker{margin-bottom:8px}@media(max-width:480px){:host .panel{width:97vw;max-height:90vh}:host .player-strip button{flex:1 1 auto}:host nav button{font-size:10px;padding:9px 1px}:host .metric b{font-size:15px}}';
- root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming','Warm-up'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
+ const css=':host{position:fixed;inset:0;z-index:50000;pointer-events:none;font-family:system-ui;color:#eee}:host *{box-sizing:border-box}:host button{cursor:pointer}:host .launch{position:absolute;bottom:19px;right:17px;border-radius:30px;border:1px solid #9771c9;background:#342150;color:#fff;padding:12px 15px;pointer-events:auto;font-weight:bold}:host .panel{display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(700px,94vw);max-height:86vh;background:#181a2a;border:1px solid #62568a;border-radius:13px;box-shadow:0 5px 40px #000b;pointer-events:auto;overflow:hidden;flex-direction:column}:host(.open) .panel{display:flex}:host header{display:flex;align-items:center;justify-content:space-between;background:#35264a;padding:13px}:host h2{margin:0;font-size:18px}:host .close{border:0;background:#593e6c;color:#fff;padding:5px 10px}:host nav{display:flex;background:#27283a;overflow-x:auto;scrollbar-width:thin}:host .sections{display:flex;background:#242034;border-bottom:1px solid #54466d}:host .sections button{flex:1;border:0;padding:12px 8px;font-size:13px;font-weight:700;background:none;color:#c3bcdf;cursor:pointer}:host .sections button.active{background:#594076;color:white}:host([data-section=discovery]) nav.tools,:host([data-section=friends]) nav.tools{display:none}:host .map-link{color:#c7a5ff;text-decoration:none;font-weight:650}:host .map-link:hover{text-decoration:underline}:host .action-button{background:#543675;color:white;padding:9px 12px;border:1px solid #876eac;border-radius:7px}:host .notice{color:#ffbcc2}:host .checkline{display:flex;align-items:center;gap:9px;margin:10px 0}:host textarea{width:100%;padding:9px;resize:vertical;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px}:host .friend-controls,:host .friend-actions{display:flex;gap:9px;align-items:end;flex-wrap:wrap}:host .friend-controls label{flex:1}:host .friend-queue{max-height:230px;overflow:auto;border:1px solid #42506a;border-radius:8px}:host .friend-results{max-height:180px;overflow:auto;padding:6px;border:1px solid #42506a;border-radius:8px}:host .friend-result{display:flex;align-items:center;gap:8px;padding:6px;border-bottom:1px solid #333a54}:host .friend-result input{width:auto;margin:0}:host .friend-result small{color:#99aec3}:host .friend-actions button{flex:1}:host .checkline input{width:auto;margin:0;accent-color:#a27ede}:host .scroll td small{display:block;color:#b7bdd0;font-size:10px}:host nav button{flex:1;min-width:72px;padding:11px 3px;font-size:12px;background:none;color:#c3bcdf;border:0}:host nav button.active{background:#49345c;color:white}:host #contents{overflow-y:auto;padding:15px}:host .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:12px 0}:host label{font-size:12px;color:#bcc6d9}:host input,:host select{display:block;padding:9px;background:#090e20;color:white;border:1px solid #4b526b;border-radius:6px;width:100%;margin-top:3px}:host .metric{padding:11px;background:#272d44;border-radius:7px;min-width:0}:host .metric small{display:block;color:#aebbd2;font-size:10px}:host .metric b{display:block;font-size:19px;color:#f0e3ff;overflow-wrap:anywhere}:host p{font-size:12px;color:#c2cde0;margin:5px 0 11px}:host .scroll{overflow:auto}:host table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:11px}:host td,:host th{padding:7px;border-bottom:1px solid #3c4359;text-align:left}:host .fine{font-size:10px;color:#9ba9c3}:host .player-strip{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin-bottom:10px;padding:9px 10px;background:#242739;border:1px solid #3c4260;border-radius:10px}:host .player-strip .tool-picker{width:180px;flex:1 1 150px}:host .player-strip button{padding:10px 12px;border-radius:7px;white-space:nowrap}:host .player-strip small{flex:1 1 100%;margin-top:0}:host .medal-strip{background:#1e2b37;border:1px solid #3b5162;padding:8px 11px;margin:8px 0 12px;border-radius:9px;display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}:host .medal-strip>b{font-size:13px;color:#dbeaff}:host .medal-strip>small{font-size:11px;color:#a9bacd;flex:1}:host details.fold{border:1px solid #3a425e;border-radius:8px;margin:10px 0;background:#202537}:host details.fold summary{cursor:pointer;user-select:none;padding:10px 12px;font-size:12px;color:#c8c7eb;font-weight:650;list-style:disclosure-closed}:host details.fold[open] summary{border-bottom:1px solid #3a425e;list-style:disclosure-open}:host details.fold .grid,:host details.fold label,:host details.fold p,:host details.fold .scroll{margin:10px}:host .medal-strip details.fold{flex:1 1 100%;margin:2px 0 0;border:0;background:transparent}:host .medal-strip details.fold summary{padding:4px 0;font-size:11px}:host .medal-strip details.fold .grid{margin:8px 0}:host .section-label{font-size:12px;color:#ede5ff;font-weight:700;margin-top:15px}:host .scenario-fold .scroll{max-height:260px}:host .panel{width:min(740px,95vw)}:host .metric{padding:9px}:host .metric b{font-size:17px}:host .grid{gap:7px}:host input,:host select{padding:8px}:host .player-tools .grid{margin:6px 0}:host details.fold .tool-picker{margin-bottom:8px}@media(max-width:480px){:host .panel{width:97vw;max-height:90vh}:host .player-strip button{flex:1 1 auto}:host nav button{font-size:10px;padding:9px 1px}:host .metric b{font-size:15px}}';
+ root.shadowRoot.innerHTML='<style>'+css+'</style><div class="panel"><header><h2>⚡ Theo’s Progression Toolkit <small style="font-size:11px;opacity:.8">Ctrl+Shift+P • Esc to close</small></h2><button class="close">×</button></header><div class="sections">'+['Calculators','Discovery','Friends'].map(x=>'<button data-section="'+x+'"'+(section===x?' class="active"':'')+'>'+x+'</button>').join('')+'</div><nav class="tools">'+['Improvement','Overdrive','Prestige','Rebirth','Farming','Warm-up'].map(x=>'<button data-tab="'+x+'">'+x+'</button>').join('')+'</nav><div id="contents"></div></div>';
  root.shadowRoot.addEventListener('click',e=>{
  const b=e.target.closest('button');if(!b)return;
- if(b.classList.contains('close'))root.classList.remove('open');
+ if(b.classList.contains('close')){friendPause('Stopped when toolkit closed.');root.classList.remove('open');}
  if(b.dataset.section){
+  if(section==='Friends'&&b.dataset.section!=='Friends')friendPause('Stopped when changing tabs.');
   section=b.dataset.section;root.dataset.section=section.toLowerCase();
   root.shadowRoot.querySelectorAll('.sections button').forEach(n=>n.classList.toggle('active',n.dataset.section===section));
   render();if(section==='Discovery'&&mapState.status==='idle')void loadMapDiscovery();
  }
- if(b.dataset.tab){section='Calculators';tab=b.dataset.tab;root.dataset.section='calculators';
+ if(b.dataset.tab){if(section==='Friends')friendPause('Stopped when changing tabs.');section='Calculators';tab=b.dataset.tab;root.dataset.section='calculators';
   root.shadowRoot.querySelectorAll('.tools button').forEach(n=>n.classList.toggle('active',n.dataset.tab===tab));render();}
  if(b.dataset.action==='refresh-maps'&&mapState.status!=='loading')void loadMapDiscovery();
+  const action=b.dataset.friendAction;
+  if(action==='refresh')void friendRefresh();
+  if(action==='search')void friendSearch();
+  if(action==='queue-selected')friendAddQueue(friendState.results.filter(x=>friendState.selected.has(x.id)));
+  if(action==='queue-ids')friendImportIds();
+  if(action==='start')void friendStart();
+  if(action==='pause')friendPause('Stopped by you. Refresh before restarting.');
+  if(action==='clear'&&!friendState.running){friendState.queue=[];friendState.approved=false;renderFriends();}
   if(b.dataset.action==='load-stats'&&playerState.status!=='loading')void loadPlayerStats();
  e.stopPropagation();
 });
  root.shadowRoot.addEventListener('toggle',e=>{if(e.target?.dataset?.setting in ui)ui[e.target.dataset.setting]=e.target.open;},true);
  root.shadowRoot.addEventListener('change',e=>{
+  const pick=e.target.dataset?.friendPick;
+  if(pick){const id=friendId(pick);if(id){if(e.target.checked)friendState.selected.add(id);else friendState.selected.delete(id);}e.stopPropagation();return;}
+  if(e.target.hasAttribute?.('data-friend-approve')){friendState.approved=Boolean(e.target.checked);renderFriends();e.stopPropagation();return;}
  const pc=e.target.dataset.player;
   if(pc==='skill'&&SKILL_IDS.includes(e.target.value)){playerState.skill=e.target.value;playerState.status='idle';render();e.stopPropagation();return;}
   if(pc==='character'){playerState.characterId=Number(e.target.value);playerState.status='idle';render();e.stopPropagation();return;}
@@ -534,6 +731,9 @@ export function mount(){
  e.stopPropagation();
 });
 root.shadowRoot.addEventListener('input',e=>{
+  const field=e.target.dataset?.friendInput;
+  if(field==='search')friendState.query=String(e.target.value);
+  if(field==='ids')friendState.idText=String(e.target.value);
  if(e.target.dataset.mapFilter==='query'&&mapState.status==='ready'){
   mapState.query=e.target.value;renderMapResults();
  }
@@ -545,15 +745,16 @@ root.shadowRoot.addEventListener('input',e=>{
    const toggle=e.ctrlKey&&e.shiftKey&&!e.altKey&&!e.metaKey&&(e.code==='KeyP'||(e.key||'').toLowerCase()==='p');
    if(toggle){
      e.preventDefault();e.stopImmediatePropagation();
-     if(!e.repeat)root?.classList.toggle('open');
+     if(!e.repeat){if(root?.classList.contains('open'))friendPause('Stopped when toolkit closed.');root?.classList.toggle('open');}
    }else if(e.key==='Escape'&&root?.classList.contains('open')){
-     e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
+     e.preventDefault();e.stopImmediatePropagation();friendPause('Stopped when toolkit closed.');root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.6. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.7. Press Ctrl+Shift+P.');
 }
 export function unmount(){
+ friendPause('Stopped: add-on unloaded.');
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
- hotkeyHandler=null;mapRequest++;playerRequest++;playerState.status='idle';playerState.medalStatus='idle';playerState.rows=[];playerState.characterId=null;playerState.medalCharacterId=null;ui.medalManual=false;ui.odBuild=false;section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
+ hotkeyHandler=null;mapRequest++;playerRequest++;playerState.status='idle';playerState.medalStatus='idle';playerState.rows=[];playerState.characterId=null;playerState.medalCharacterId=null;ui.medalManual=false;ui.odBuild=false;friendState.ready=false;friendState.queue=[];friendState.results=[];friendState.selected.clear();section='Calculators';tab='Improvement';mapState.status='idle';mapState.sets=[];mapState.characters=[];mapState.played=new Map();
  root?.remove();root=null;
 }

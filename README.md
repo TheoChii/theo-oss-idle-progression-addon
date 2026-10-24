@@ -4,9 +4,10 @@ An unofficial, experimental in-game progression toolkit add-on for [oss!idle](ht
 
 **Vibe-coded by Theo with AI assistance.** This project was developed using AI-generated and AI-assisted code, with review and automated tests. Its estimates are not official game guidance.
 
-## Two main sections
+## Three main sections
 
 - **Calculators:** Skill Improvement, Overdrive, Prestige, Rebirth, Farming, and Warm-up.
+- **Friends:** user-approved account-follow queue, optional username lookup, current followers toward medal thresholds, 6.5-second spacing, pause/stop, duplicate avoidance and explicit per-batch confirmation. Sends **no messages** and does not auto-select anyone.
 - **Discovery:** filter downloaded osu!mania beatmaps to find difficulties with no local score for the selected character. Includes search, max stars, sort order, play count, and a link to the corresponding osu! beatmap page. Discovery is 4K-only, so it does not display a redundant key-mode dropdown.
 
 Discovery uses oss!idle's read-only local SQL database bridge and the downloaded beatmap IndexedDB metadata, as documented in the [official add-on SDK](https://github.com/oss-idle/addon-sdk/blob/master/packages/addon-sdk/README.md). It does **not** contact a live ranked-map catalog, and “no local play found” does not prove the character has never played a chart on another device or before clearing data. Characters are suggested from the latest locally stored score, with a manual selector if that guess is wrong. Select **Refresh** after starting the client or finishing a play.
@@ -23,6 +24,38 @@ Discovery uses oss!idle's read-only local SQL database bridge and the downloaded
 - **Medals:** automatically classify all 148 currently defined medal IDs into Bronze, Silver, Gold, Platinum and Divine tiers when you load an online character. Each medal compounds its XP bonus (0.25%, 0.5%, 1%, 2% and 3% respectively). Manual fallback remains available for guests, offline use and service errors. Unknown future medals are reported, not guessed.
 - **New in v0.4.6:** adds five friendship/follower medals (1, 5, 25, 100, 1,000), six mapper medals (1, 2, 5, 10, 50, 100), and two secret medals (fail-10s and parallax). The server awards friend medals for distinct other accounts that add your account (incoming followers), not how many accounts you add. This add-on never sends friend requests.
 
+## Optional Friend Manager — explicit account actions
+
+The Friend Manager tab is the **only part of the toolkit that changes your account state**.
+Everything in the calculators and Discovery remains read-only. This feature is opt-in,
+does not begin automatically, and does not send any messages.
+
+1. Open **Friends** and choose **Verify login & refresh friends**. The panel checks your
+   signed-in account, displays incoming followers and reads your outgoing friend list.
+2. Search specific players by character name. Select the accounts you want, then
+   choose **Queue selected players**. You can also paste numeric account IDs
+   (not character IDs) in the advanced import box.
+3. Review the queue (maximum 100 accounts at once) and check the approval box.
+   Click **Start adds**. Each outgoing PUT /v1/social/friends/{userId}
+   request is at least 6.5 seconds after the previous success — under 10 per minute.
+4. **Stop** anytime, or close the toolkit/switch sections to pause the queue.
+   A request already in flight can still finish. Refresh before restarting after errors.
+5. The tool stops on any API error, including authentication or 429 rate-limit errors;
+   there is no automatic retry or way around the game's restrictions.
+
+The only API origin used is the official https://api.oss.idle.rhythmgamers.net.
+Requests use your active game session: browser session cookies or the desktop
+client's live bearer token (kept in memory for the request and never logged,
+stored, or transmitted elsewhere). Search and follower refresh are GET requests.
+Queued player IDs are held in memory, not uploaded to another service or
+stored persistently. The social PUT requests are sent only after explicit
+batch approval. Please respect the game's current community rules and avoid
+unwanted interactions. Game/server limits can be stricter than this client's
+pacing and always take precedence.
+
+The **Icon** medal counts players who follow **you**, not how many players you follow.
+The progress card reports incoming follower thresholds of 1, 5, 25, 100 and 1,000.
+
 ## Install and update through GitHub (recommended)
 
 This repository now supports oss!idle's **Built from a git repository** add-on type. The game builds the newest `vX.Y.Z` tag itself, rather than requiring you to paste fresh JavaScript every time.
@@ -31,9 +64,9 @@ This repository now supports oss!idle's **Built from a git repository** add-on t
 2. Enter the public repository URL: **https://github.com/TheoChii/theo-oss-idle-progression-addon**.
 3. Save the add-on and copy the **webhook URL generated by oss!idle**.
 4. On GitHub, open **Settings → Webhooks → Add webhook** for this repository. Paste that URL as the **Payload URL**; use **application/json**, select **Just the push event**, and keep it active.
-5. The repository has a version-tag release at `v0.4.6`. The game should pick up the newest version when its build queue runs. Check the build log and then **install/enable** the built add-on (and submit it for review if the game requires that).
+5. The repository has a version-tag release at `v0.4.7`. The game should pick up the newest version when its build queue runs. Check the build log and then **install/enable** the built add-on (and submit it for review if the game requires that).
 
-For future updates, commit to `main` and push a **new version tag** (for example `v0.4.7`). Untagged edits to `main` are **not** new releases. The webhook URL belongs to your specific in-game add-on, so do not post it publicly.
+For future updates, commit to `main` and push a **new version tag** (for example `v0.4.8`). Untagged edits to `main` are **not** new releases. The webhook URL belongs to your specific in-game add-on, so do not post it publicly.
 
 ### Manual fallback
 
@@ -42,7 +75,7 @@ To install by pasted code instead, copy the self-contained [source module](progr
 Press **Ctrl+Shift+P** in game to open or close the toolkit; **Esc** closes its panel.
 
 
-## XP input conventions (v0.4.6)
+## XP input conventions (v0.4.7)
 
 - **Overdrive and Prestige:** `Base skill XP/play` means XP **before** upgrades, Overdrive, prestige and medals; the toolkit multiplies all of these automatically when estimating plays.
 - **Rebirth and Farming:** XP/play inputs should be **before medal bonuses**. For Rebirth, include any other boosts already present in your total XP rate. Farming splits the rates into **physical** (Speed, Stamina, Jack Speed), **Memory**, and **other skills**, with any other boosts already included as appropriate.
@@ -55,8 +88,8 @@ Press **Ctrl+Shift+P** in game to open or close the toolkit; **Esc** closes its 
 
 ## Safety and limitations
 
-- The add-on is **read-only**: it doesn't change character progression or perform gameplay actions. Map links open osu! in a separate browser tab only when clicked. The only optional network request is a public medal lookup for the chosen online character.
-- Calculators use locally entered numbers and optionally cached read-only local character progression via the stat-fill button. Discovery reads only locally stored character names, score history and downloaded chart metadata. The medal lookup transmits the selected **numeric public character ID** to the game's own API to retrieve public medal data; no secret credentials or game progression are transmitted.
+- **Calculators and Discovery are read-only.** The optional Friend Manager sends authenticated friend-add requests **only when you manually approve and start a queue**. It never modifies progression, sends messages, or runs friends automation on install. Map links open osu! when clicked.
+- Calculators use locally entered numbers and optionally cached read-only local progression. Discovery reads local chart and score metadata. The public medal lookup transmits a numeric public character ID to the game API. The **Friend Manager**, when you enable its actions, sends numeric player account IDs to the game API using the active logged-in session; it does not extract or save secrets or contact third-party services.
 - Skill comparisons show modeled gameplay parameters, **not guaranteed score, accuracy, or clear-rate improvements**.
 - Game mechanics change over time. Check formulas against the current game before relying on a result.
 - Third-party add-ons run in the game page context; review any source before enabling it.
@@ -68,7 +101,7 @@ The add-on is a dependency-free JavaScript ES module exporting `mount()` and `un
 ```sh
 npm ci --ignore-scripts
 npm run build   # dist/progression-toolkit.addon.js
-npm test        # eight suites
+npm test        # nine suites
 ```
 
 Do not commit generated `dist/` files or `node_modules/`: oss!idle rebuilds the version-tagged source itself. The built JavaScript stays readable and does not use runtime dynamic imports or code evaluation.
