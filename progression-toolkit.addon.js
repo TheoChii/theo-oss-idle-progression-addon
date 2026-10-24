@@ -1,7 +1,7 @@
-/* Theo's oss!idle Progression Toolkit v0.4.0 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.4.1 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Read-only; AGPL-3.0-only. Exports mount() and unmount(). */
-const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,affected:10000,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed'};
+const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,affected:10000,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
 let data={...A},root=null,tab='Improvement',section='Calculators',hotkeyHandler=null;
 const val=k=>Math.max(0,+data[k]||0),fmt=(v,d=2)=>Number.isFinite(v)?v.toLocaleString('en-US',{maximumFractionDigits:d}):'—';
 function cb(x0,y0,x1,y1){let ax=1-(x1=3*(x1-x0)-(x0*=3))-x0,ay=1-(y1=3*(y1-y0)-(y0*=3))-y0;return t=>{if(t<=0)return 0;if(t>=1)return 1;let r=t,s=0,d=1,x;for(let i=0;i<32;i++){x=r*(r*(r*ax+x1)+x0)-t;if(Math.abs(x)<1e-5)break;let dv=r*(r*ax*3+x1*2)+x0;if(Math.abs(dv)<1e-5)break;r-=x/dv;}if(r<0||r>1){r=t;for(let i=0;i<60;i++){x=r*(r*(r*ax+x1)+x0);if(Math.abs(x-t)<1e-5)break;if(t>x)s=r;else d=r;r=(d+s)/2;}}return r*(r*(r*ay+y1)+y0);};}
@@ -10,10 +10,13 @@ const xp=n=>100+9900*early(n/100)+90000*late((n-60)/40)+(n<100?0:5e6*(n-99)*(n-9
 const xpTotal=[0];function to(n){n=Math.max(0,Math.floor(n));while(xpTotal.length<=n){let x=xpTotal.length-1;xpTotal.push(xpTotal[x]+xp(x));}return xpTotal[n];}
 const xpAt=n=>to(Math.floor(n))+(n%1)*xp(Math.floor(n));
 const sigma=n=>Math.max(1,Math.min(n,2.5*Math.pow(n,Math.log10(2))));
-const boost=(u,s,p)=>(1+.1*u*sigma(s))*Math.pow(1.1,p);
+/** Medal bonuses compound per owned medal, in a separate XP multiplier pool. */
+const MEDAL_RATES={bronze:.0025,silver:.005,gold:.01,platinum:.02,divine:.03};
+const medals=counts=>Object.entries(MEDAL_RATES).reduce((product,[tier,rate])=>product*Math.pow(1+rate,Math.max(0,Math.floor(+counts[tier]||0))),1);
+const boost=(u,s,p,m=1)=>(1+.1*u*sigma(s))*Math.pow(1.1,p)*m;
 const minLevel=u=>u<10?(u+1)*10:u+91;
 const levelCost=u=>u<10?10:1;
-function preview(n,u,s,p){if(u>=10+p||n<minLevel(u))return null;let k=levelCost(u),l=Math.floor(n),r=n-l,cost=to(l)+r*xp(l)-to(l-k)-r*xp(l-k),base=to(minLevel(u))-to(minLevel(u)-k),ratio=cost/base,add=ratio>1?ratio:0;return {add,cost,newSigma:s+add,newBoost:boost(u+1,s+add,p),after:n-k};}
+function preview(n,u,s,p,m=1){if(u>=10+p||n<minLevel(u))return null;let k=levelCost(u),l=Math.floor(n),r=n-l,cost=to(l)+r*xp(l)-to(l-k)-r*xp(l-k),base=to(minLevel(u))-to(minLevel(u)-k),ratio=cost/base,add=ratio>1?ratio:0;return {add,cost,newSigma:s+add,newBoost:boost(u+1,s+add,p,m),after:n-k};}
 /* Skill Improvement core — mirrored from oss-idle/oss-idle packages/shared/src/sim/skills, 2026-10-21.
  * Inputs to skillMetrics are the mapped gameplay/strain level, NOT the visible XP level.
  * These formulas are embedded directly in the in-game add-on.
@@ -221,10 +224,12 @@ function renderDiscovery(){
 const row=(label,value,detail='')=>'<div class="metric"><small>'+label+'</small><b>'+value+'</b><small>'+detail+'</small></div>';
 const field=(k,label)=>'<label>'+label+'<input type="number" data-key="'+k+'" step="any" min="0" value="'+data[k]+'"></label>';
 const grid=items=>'<div class="grid">'+items.join('')+'</div>';
+const medalFields=()=>grid(Object.keys(MEDAL_RATES).map(k=>field(k,k[0].toUpperCase()+k.slice(1)+' medals')));
+const medalSummary=m=>grid([row('Medal XP multiplier',fmt(m,4)+'×','Compounded across all earned medals'),row('Medal rates','0.25% · 0.5% · 1%','Bronze, Silver, Gold · Platinum 2% · Divine 3%')]);
 const tbl=(names,rows)=>'<div class="scroll"><table><thead><tr>'+names.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
 function render(){
  if(section==='Discovery'){renderDiscovery();return;}
- let c='',u=Math.floor(val('upgrades')),p=Math.floor(val('prestige')),s=val('overdrive'),l=val('level'),xpRate=Math.max(1,val('xpPlay'));
+ let c='',u=Math.floor(val('upgrades')),p=Math.floor(val('prestige')),s=val('overdrive'),l=val('level'),xpRate=Math.max(1,val('xpPlay')),medalBoost=medals(data),currentBoost=boost(u,s,p,medalBoost),effectiveXpRate=xpRate*currentBoost;
  if(tab==='Improvement'){
  const current=val('improveCurrent'),target=val('improveTarget'),prestige=Math.floor(val('improvePrestige'));
  const choice=SKILL_IDS.includes(data.improveSkill)?data.improveSkill:'speed';
@@ -245,36 +250,36 @@ function render(){
  c+=tbl(['Skill','Parameter','Current','Target','Improvement'],all);
  c+='<p class="fine">These are exact per-level model parameter formulas, not a prediction of accuracy, clear rate, or overall performance on a particular map. NPS, strain rates, error factors, and percentages use different units and are not directly comparable across skills. XP earned includes no purchase spending and assumes an unchanged prestige count.</p>';
  }else if(tab==='Overdrive'){
- c='<p>Preview an upgrade at any level. Current defaults match your Speed build.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige count'),field('buyAt','Plan to buy at XP level'),field('xpPlay','XP earned per play')]);
- let req=minLevel(u),earliest=Math.max(l,req),choose=Math.max(earliest,val('buyAt')),q=preview(choose,u,s,p);
+ c='<p>Preview an upgrade at any level. Current defaults match your Speed build.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored Overdrive σ'),field('prestige','Prestige count'),field('buyAt','Plan to buy at XP level'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
+ let req=minLevel(u),earliest=Math.max(l,req),choose=Math.max(earliest,val('buyAt')),q=preview(choose,u,s,p,medalBoost);
  // Keep the Overdrive status grid at four cards in every state: locked, eligible and maxed.
- const maxed=u>=10+p,eligible=!maxed&&l>=req,remaining=maxed?0:Math.max(0,xpAt(req)-xpAt(l)),now=eligible?preview(l,u,s,p):null;
+ const maxed=u>=10+p,eligible=!maxed&&l>=req,remaining=maxed?0:Math.max(0,xpAt(req)-xpAt(l)),now=eligible?preview(l,u,s,p,medalBoost):null;
  c+=grid([
-   row('Current multiplier',fmt(boost(u,s,p))+'×',fmt(s)+'σ stored'),
+   row('Current multiplier',fmt(currentBoost,4)+'×',fmt(s)+'σ · including medals'),
    row('Next upgrade',maxed?'MAXED':'Lv'+req,u+'/'+(10+p)+' slots'),
    row(maxed?'Upgrade slots':eligible?'Upgrade unlocked':'XP to unlock',
        maxed?'All filled':eligible?'READY':fmt(remaining,0),
        maxed?'Prestige for more slots':eligible?'Requirement met at Lv'+req:'Available at Lv'+req),
    row(maxed?'Next extra slot':eligible?'Overdrive if bought now':'Plays to unlock',
-       maxed?'Prestige '+(p+1):eligible?'+'+fmt(now?.add??0)+'σ':fmt(Math.ceil(remaining/xpRate),0),
-       maxed?'One extra slot per prestige':eligible?'At your current level':'At '+fmt(xpRate,0)+' XP/play')
+       maxed?'Prestige '+(p+1):eligible?'+'+fmt(now?.add??0)+'σ':fmt(Math.ceil(remaining/effectiveXpRate),0),
+       maxed?'One extra slot per prestige':eligible?'At your current level':'At '+fmt(effectiveXpRate,0)+' boosted XP/play')
  ]);
  if(u===0)c+='<p class="fine">With 0 upgrades, your stored σ does not add XP by itself. Buying your first upgrade activates the upgrade bonus. Since your level is '+fmt(l)+', comparison rows begin at your current level rather than Lv'+req+'.</p>';
- if(q)c+=grid([row('Overdrive gained','+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ total'),row('Multiplier after',fmt(q.newBoost)+'×','from '+fmt(boost(u,s,p))+'×'),row('Skill level after',fmt(q.after),'Spends '+fmt(q.cost,0)+' XP'),row('XP to planned purchase',fmt(Math.max(0,xpAt(choose)-xpAt(l)),0),fmt(Math.ceil(Math.max(0,xpAt(choose)-xpAt(l))/xpRate),0)+' plays')]);
+ if(q)c+=grid([row('Overdrive gained','+'+fmt(q.add)+'σ',fmt(q.newSigma)+'σ total'),row('Multiplier after',fmt(q.newBoost,4)+'×','from '+fmt(currentBoost,4)+'×'),row('Skill level after',fmt(q.after),'Spends '+fmt(q.cost,0)+' XP'),row('XP to planned purchase',fmt(Math.max(0,xpAt(choose)-xpAt(l)),0),fmt(Math.ceil(Math.max(0,xpAt(choose)-xpAt(l))/effectiveXpRate),0)+' plays')]);
  const candidates=[earliest,earliest+.1,earliest+.25,earliest+.5,earliest+1,earliest+2,choose],unique=[...new Set(candidates.map(n=>+n.toFixed(4)))].sort((a,b)=>a-b);
- let rows=[];for(const n of unique){let x=preview(n,u,s,p);if(x)rows.push(['Lv'+fmt(n)+(Math.abs(n-choose)<.00001?' ★':''),'+'+fmt(x.add)+'σ',fmt(x.newSigma)+'σ',fmt(x.newBoost)+'×',fmt(Math.max(0,xpAt(n)-xpAt(l)),0)]);}if(rows.length)c+=tbl(['Buy at','Earn σ','Total σ','XP boost','XP to wait'],rows);
+ let rows=[];for(const n of unique){let x=preview(n,u,s,p,medalBoost);if(x)rows.push(['Lv'+fmt(n)+(Math.abs(n-choose)<.00001?' ★':''),'+'+fmt(x.add)+'σ',fmt(x.newSigma)+'σ',fmt(x.newBoost,4)+'×',fmt(Math.max(0,xpAt(n)-xpAt(l)),0)]);}if(rows.length)c+=tbl(['Buy at','Earn σ','Total σ','XP boost','XP to wait'],rows);
  }else if(tab==='Prestige'){
- c='<p>Prestiging resets one skill to Lv0, loses upgrades and σ, but adds +10% permanent XP, +1 bonus level, +1 gear slot.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored σ'),field('prestige','Previous prestiges'),field('xpPlay','Skill XP per play')]);
+ c='<p>Prestiging resets one skill to Lv0, loses upgrades and σ, but adds +10% permanent XP, +1 bonus level, +1 gear slot. Earned medals are retained.</p>'+grid([field('level','Current real XP level'),field('upgrades','Upgrades bought'),field('overdrive','Stored σ'),field('prestige','Previous prestiges'),field('xpPlay','Base skill XP/play before boosts')]);c+=medalFields();c+=medalSummary(medalBoost);
  let req=100+p,remaining=Math.max(0,xpAt(req)-xpAt(l));
- c+=grid([row('Next prestige','Lv'+req,fmt(remaining,0)+' XP remaining'),row('Estimated plays',fmt(Math.ceil(remaining/xpRate),0),'Fixed XP/play'),row('Multiplier now',fmt(boost(u,s,p))+'×'),row('Multiplier after reset',fmt(Math.pow(1.1,p+1))+'×','Zero upgrades and σ'),row('Permanent bonus',fmt(Math.pow(1.1,p+1))+'×'),row('Available slots after',fmt(11+p,0))]);
+ c+=grid([row('Next prestige','Lv'+req,fmt(remaining,0)+' XP remaining'),row('Estimated plays',fmt(Math.ceil(remaining/effectiveXpRate),0),'Fixed XP/play'),row('Multiplier now',fmt(currentBoost,4)+'×'),row('Multiplier after reset',fmt(Math.pow(1.1,p+1)*medalBoost,4)+'×','Zero upgrades and σ; medals retained'),row('Permanent prestige bonus',fmt(Math.pow(1.1,p+1))+'×','Medals listed separately'),row('Available slots after',fmt(11+p,0))]);
  }else if(tab==='Rebirth'){
- c='<p>Overall level 110 needs approximately 2.202 billion cumulative unspent XP. Estimates assume no future purchases and unchanged XP rate.</p>'+grid([field('overall','Overall XP level'),field('totalXpPlay','Total skill XP per play'),field('minutes','Minutes per play'),field('hours','Hours farming per day')]);
- let remaining=Math.max(0,to(110)-xpAt(val('overall'))),plays=Math.ceil(remaining/Math.max(1,val('totalXpPlay')));
+ c='<p>Overall level 110 needs approximately 2.202 billion cumulative unspent XP. Estimates assume no future purchases and unchanged XP rate.</p>'+grid([field('overall','Overall XP level'),field('totalXpPlay','Total skill XP/play before medal boosts'),field('minutes','Minutes per play'),field('hours','Hours farming per day')]);
+ c+=medalFields();c+=medalSummary(medalBoost);let remaining=Math.max(0,to(110)-xpAt(val('overall'))),plays=Math.ceil(remaining/Math.max(1,val('totalXpPlay')*medalBoost));
  c+=grid([row('XP remaining',fmt(remaining,0)),row('Estimated plays',fmt(plays,0)),row('Total hours',fmt(plays*val('minutes')/60)),row('Days at schedule',fmt(plays*val('minutes')/60/Math.max(1,val('hours')))),row('Full rebirth threshold',fmt(to(110),0))]);
  c+=tbl(['Overall Lv','Cumulative XP'],[100,101,102,103,104,105,106,107,108,109,110].map(n=>[n,fmt(to(n),0)]));
  }else{
- c='<p>Mindblock is capped at a 75% reduction after 25 previous same-map plays. Speed, Jack Speed, Stamina and Memory are exempt.</p>'+grid([field('repeats','Recent same-map plays'),field('exempt','XP/play from exempt skills'),field('affected','XP/play from affected skills'),field('minutes','Minutes per play')]);
- let m=1-.75*mind(Math.min(1,val('repeats')/25)),gained=val('exempt')+val('affected')*m;
+ c='<p>Mindblock is capped at a 75% reduction after 25 previous same-map plays. Speed, Jack Speed, Stamina and Memory are exempt.</p>'+grid([field('repeats','Recent same-map plays'),field('exempt','Base XP/play from exempt skills'),field('affected','Base XP/play from affected skills'),field('minutes','Minutes per play')]);
+ c+=medalFields();c+=medalSummary(medalBoost);let m=1-.75*mind(Math.min(1,val('repeats')/25)),gained=(val('exempt')+val('affected')*m)*medalBoost;
  c+=grid([row('Penalty',fmt((1-m)*100)+'%'),row('Affected XP kept',fmt(m*100)+'%'),row('XP per play',fmt(gained,0)),row('XP per minute',fmt(gained/Math.max(.01,val('minutes')),0))]);
  c+=tbl(['Prior plays','XP reduction','XP retained'],[0,5,10,15,20,25].map(n=>[n,fmt(75*mind(n/25))+'%',fmt(100-75*mind(n/25))+'%']));
  }
@@ -325,7 +330,7 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.0. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.4.1. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  if(hotkeyHandler)window.removeEventListener('keydown',hotkeyHandler,true);
