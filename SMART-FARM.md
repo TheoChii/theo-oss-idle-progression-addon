@@ -1,4 +1,4 @@
-## Smart Farm / Auto Queue (experimental, v0.5.1)
+## Smart Farm / Auto Queue (experimental, v0.5.2)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened from the **⚡ Smart Farm** floating button or **Ctrl+Shift+G**. The original **Ctrl+Shift+P** calculator and its features are preserved.
 
@@ -11,6 +11,31 @@ The adaptive planner ranks by **expected XP/minute including transition overhead
 Choose **Primary XP skill** (or all skills) and **Switch to** (Accuracy, any other skill, all non-physical, all eligible, or Stop). The initial fatigue cutoff is **10% physical XP retained**; you can change it. Skills at **Lv 100 + their current prestige count** are automatically excluded; if no selected or fallback skill is eligible, the managed queue stops. It does not buy upgrades, perform prestige, or change character progression.
 
 Full-library scans happen when you press **Scan**, then at most every configured **10–120 minutes** while the live optimizer runs (default 20). Every minute the planner refreshes the character and the game's recent-score history and re-ranks cached simulation results. Upgrade or prestige changes trigger a new scan. Rate choices are stored per beatmap; one NM or HR setting applies to the entire queued rotation.
+
+### PP Farm mode, new in v0.5.2
+
+- Select Farming goal -> PP / Rank improvement. This initiates a new scan
+  of downloaded ranked 4K maps. Full map downloads are not automated.
+- The simulator tests NM and HR at unlocked playback rates, calculates
+  PP with the active mods, and ranks predicted weighted profile gain.
+- The game weighs its best PP on every unique beatmap by 0.95^rank.
+  Playing a chart again without a PP personal best adds zero ranking PP.
+- Choose Weighted PP gain / minute for efficiency or Highest weighted PP
+  gain to focus on larger potential improvements. Minimum gain defaults
+  to 0.25. PP mode does not depend on XP Mindblock penalties.
+- Registered local scores and up to the top 255 server best-PP scores
+  provide the baseline. The panel displays its data source. Offline
+  local caches may be incomplete; PP estimates are not guarantees.
+- Live optimization, when explicitly approved, rereads local scores
+  approximately every minute, reads server bests at most every five
+  minutes, and rescans downloaded charts at your selected interval.
+  If no worthwhile new PP remains, the managed queue stops.
+- Global NM/HR mods cannot differ between queued entries; playback
+  speed can. The game may replay a map before client score history
+  refreshes or finish the current map after a queue replacement.
+- Switching between PP and XP clears the prior plan and stops
+  any live managed queue; switching to PP begins a fresh scan.
+  PP scoring never triggers automatic prestige or map downloads.
 
 ### Starting safely
 
@@ -36,4 +61,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 12 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 14 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.

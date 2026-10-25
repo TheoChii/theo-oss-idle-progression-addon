@@ -8,3 +8,9 @@
 - License: AGPL-3.0-only. See upstream projects for copyright holders. All source is retained in this public repository.
 
 - v0.5.1: worker simulates NM and HR through pinned-game ManiaGame mod-specific timing windows and modXp bonus. The live queue selects one session-wide mod set because queue entries only support rates.
+
+- v0.5.2: PP mode follows pinned server scores.ts recomputePP,
+  weighting the best PP per beatmap by 0.95 raised to sorted rank.
+  Its existing-best baseline comes from registered local scores and
+  the public top-255 best PP records. The rosu performance calculation
+  now includes the selected NM or HR mods as the official server does.
