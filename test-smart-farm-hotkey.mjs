@@ -34,6 +34,8 @@ try{
  assert.equal(panels.length,1);
  assert(!panels[0].shadowRoot.innerHTML.includes('class="fab"'),'no clickable launcher');
  assert(panels[0].shadowRoot.innerHTML.includes('id="farm-close"'),'close icon remains');
+ assert(raw.includes('id="farm-gpu-test"'),'GPU compatibility button is declared in Smart Farm panel');
+ assert(raw.includes('data-setting="gpuAssist"'),'experimental hybrid checkbox is declared');
  assert.equal(panels[0].dataset.open,'false','closed and hidden on mount');
  key({ctrlKey:true,shiftKey:true,code:'KeyP'});
  assert.equal(panels[0].dataset.open,'false','calculator keybind does not toggle Smart Farm');
