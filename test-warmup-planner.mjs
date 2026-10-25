@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const code=await readFile(new URL('./progression-toolkit.addon.js',import.meta.url),'utf8');
-assert(code.includes('v0.5.3'));
+assert(code.includes('v0.5.4'));
 const mod=await import('data:text/javascript;base64,'+Buffer.from(code+'\nexport {warmGear,warmRange,warmup,warmPlan,restedMinutes,data};').toString('base64'));
 const {warmGear,warmRange,warmup,warmPlan,restedMinutes}=mod;
 const almost=(a,b,description)=>assert(Math.abs(a-b)<1e-7,description+': '+a+' vs '+b);

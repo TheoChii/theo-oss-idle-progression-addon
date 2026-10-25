@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
 const source = await fs.readFile(new URL('./progression-toolkit.addon.js', import.meta.url), 'utf8');
-assert(source.includes('v0.5.3'));
+assert(source.includes('v0.5.4'));
 assert(source.includes("['Calculators','Discovery','Friends']"), 'Discovery and Friends sections must be retained');
 const mod = await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport { MEDAL_RATES, medals, boost, preview, xpAt, to, cb };').toString('base64'));
 const { MEDAL_RATES, medals, boost, preview, xpAt, to, cb } = mod;

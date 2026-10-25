@@ -28,7 +28,7 @@ const key=(props={})=>{
  win.dispatchEvent(e);return e;
 };
 try{
- const mod=await import('data:text/javascript;base64,'+Buffer.from('const FARM_SKILLS=[\'accuracy\'];\n'+source).toString('base64'));
+ const mod=await import('data:text/javascript;base64,'+Buffer.from('const FARM_SKILLS=[\'accuracy\'];const MAX_TIERS=30,MAX_OD=1000000;const makePolicies=(keys)=>Object.fromEntries(keys.map(k=>[k,{enabled:false,targets:Array(30).fill(0)}]));\n'+source).toString('base64'));
  const farm=new mod.SmartFarm();
  farm.mount();
  assert.equal(panels.length,1);

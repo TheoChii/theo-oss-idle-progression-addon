@@ -14,3 +14,5 @@
   Its existing-best baseline comes from registered local scores and
   the public top-255 best PP records. The rosu performance calculation
   now includes the selected NM or HR mods as the official server does.
+
+- v0.5.4: optional auto-upgrade planning uses the pinned game's `canUpgrade`/`applyUpgrade` implementation, official signed-in `GET /v1/me/character` and `POST /v1/me/upgrade`, and follows the server's deferred mid-play purchase behavior. Targets are the predicted raw OD total *after* buying each numbered gear tier. Explicit arming is never persisted.

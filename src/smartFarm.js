@@ -4,9 +4,13 @@ import {rankMaps, screenRates, refinePlan, PLAYS_PER_MAP} from './farm/metrics.j
 import {FARM_SKILLS, optimizeFarm, prestigeReady, fatigueKeep} from './optimizer.js';
 import {optimizePP} from './ppFarm.js';
 import {readBestPP} from './ppHistory.js';
+import {applyUpgrade} from '@oss-idle/shared/upgrades';
+import {makePolicies,checkUpgrade,configExport,configImport,MAX_TIERS,MAX_OD} from './autoUpgradeRules.js';
 
 const LABEL='Theo Smart Farm (managed)';
 const SETTINGS='oss-idle-addon:theo-smart-farm-v1';
+const UPGRADE_SETTINGS='oss-idle-addon:theo-auto-upgrade-policies-v1';
+const API='https://api.oss.idle.rhythmgamers.net/v1';
 const FOCUS=['all',...FARM_SKILLS];
 const FALLBACK=['accuracy','nonphysical','all','stop',...FARM_SKILLS.filter(s=>s!=='accuracy')];
 const defaults={goal:'xp',ppRank:'gainPerMinute',ppMinGain:0.25,focus:'speed',backup:'accuracy',fatigueMinutes:0,physicalShare:40,cutoff:10,overheadSec:8,slots:10,
@@ -24,9 +28,93 @@ export class SmartFarm {
   this.socket=null;this.serverQueue=null;this.socketCharacterId=null;this.playActive=false;this.lastChange=0;this.previousMode=null;this.previousMods=null;
   this.tickInterval=null;this.keyHandler=null;this.consent=false;this.session=0;this.starting=false;
   this.pendingRescan=false;this.writing=false;this.profileFingerprint=null;
+  // Policies persist locally; authenticated purchasing never arms on launch.
+  let stored={};try{stored=JSON.parse(localStorage.getItem(UPGRADE_SETTINGS)||'{}');}catch{}
+  this.upgradePolicies=makePolicies(FARM_SKILLS,stored);
+  this.autoUpgrades=false;this.autoArmId=null;this.upgradeConsent=false;
+  this.upgradeChecking=false;this.upgradePending=new Map();this.upgradeLog='';this.upgradeCursor=0;
+  this.exportText='';this.importText='';
  }
  save(){
   try{const {liveQueue,autoPlaylist,...safe}=this.s;localStorage.setItem(SETTINGS,JSON.stringify(safe));}catch{}
+ }
+ saveUpgradePolicies(){
+  try{localStorage.setItem(UPGRADE_SETTINGS,JSON.stringify(this.upgradePolicies));}catch{}
+ }
+ disarmUpgrades(reason='Auto-upgrades stopped.'){
+  this.autoUpgrades=false;this.autoArmId=null;this.upgradeConsent=false;this.upgradePending.clear();
+  this.upgradeLog=reason;
+ }
+ async upgradeRequest(path,options={}){
+  const desktop=window.ossIdleDesktop?.isDesktop?window.ossIdleDesktop:null;
+  const token=desktop?.getToken?.();
+  if(desktop&&!token)throw Error('Sign into oss!idle desktop before using upgrades.');
+  const response=await fetch(API+path,{
+   ...options,credentials:desktop?'omit':'include',
+   headers:{...(token?{Authorization:'Bearer '+token}:{}),...(options.headers||{})},
+   signal:typeof AbortSignal!=='undefined'&&AbortSignal.timeout?AbortSignal.timeout(12000):undefined});
+  if(!response.ok){
+   const error=await response.json().catch(()=>({}));
+   throw Error((error.message||error.error||'Request failed')+' (HTTP '+response.status+')');
+  }
+  return response.json();
+ }
+ async armUpgrades(){
+  if(this.autoUpgrades||this.upgradeChecking)return;
+  if(!this.upgradeConsent)throw Error('Confirm that auto-upgrades may spend skill levels.');
+  if(!FARM_SKILLS.some(k=>this.upgradePolicies[k].enabled))throw Error('Enable at least one skill first.');
+  await gameDb.ready();
+  const local=await gameCharacter.live();
+  if(!local||local.local||!(Number(local.id)>0))throw Error('Auto-upgrades require an online logged-in character.');
+  const remote=await this.upgradeRequest('/me/character');
+  if(!remote||Number(remote.id)!==Number(local.id))throw Error('Signed-in character and selected character do not match.');
+  this.autoUpgrades=true;this.autoArmId=Number(local.id);
+  this.upgradeConsent=false;this.upgradeLog='Armed for '+String(local.name||'character')+' (#'+local.id+'). Checking every minute; only enabled skills.';
+  this.render();
+  await this.checkAutoUpgrades();
+ }
+ async checkAutoUpgrades(){
+  if(!this.autoUpgrades||this.upgradeChecking||!this.root)return;
+  this.upgradeChecking=true;
+  try{
+   const local=await gameCharacter.live();
+   if(!local||Number(local.id)!==this.autoArmId||local.local){
+    this.disarmUpgrades('Selected character changed. Auto-upgrades disabled.');return;
+   }
+   const remote=await this.upgradeRequest('/me/character');
+   if(!remote||Number(remote.id)!==this.autoArmId){
+    this.disarmUpgrades('Signed-in character changed. Auto-upgrades disabled.');return;
+   }
+   const order=[...FARM_SKILLS.slice(this.upgradeCursor),...FARM_SKILLS.slice(0,this.upgradeCursor)];
+   for(const skill of order){
+    const rule=this.upgradePolicies[skill];
+    if(!rule.enabled)continue;
+    const current=remote.skills?.[skill];
+    if(!current)throw Error('Missing official skill state for '+skill);
+    const stage=Number(current.upgrades);
+    const pending=this.upgradePending.get(skill);
+    if(pending!==undefined){
+     if(stage>pending)this.upgradePending.delete(skill);
+     else continue; // Queued purchase still running; never request same tier twice.
+    }
+    if(remote.pendingActions?.some(a=>a.type==='upgrade'&&a.skill===skill))continue;
+    const result=checkUpgrade(current,rule,applyUpgrade);
+    if(!result.eligible)continue;
+    // A single authenticated account-changing purchase per check, never a batch.
+    const purchase=await this.upgradeRequest('/me/upgrade',{
+     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({skill})});
+    // Both immediate success and a mid-play deferred purchase are guarded.
+    this.upgradePending.set(skill,stage);
+    this.upgradeCursor=(FARM_SKILLS.indexOf(skill)+1)%FARM_SKILLS.length;
+    this.upgradeLog='Requested '+skill+' upgrade #'+(stage+1)+' (expected total OD '+result.preview.overdrive.toFixed(2)+
+     ', target '+result.target+'). '+(purchase.queued?'Deferred until this play finishes.':'Server accepted.');
+    this.pendingRescan=true;break;
+   }
+  }catch(e){
+   this.disarmUpgrades('Auto-upgrades disabled after error: '+(e?.message||String(e)));
+  }finally{
+   this.upgradeChecking=false;this.render();
+  }
  }
  mount(){
   if(this.root)return;
@@ -50,6 +138,23 @@ export class SmartFarm {
     e.stopPropagation();
    }
    if(t?.id==='farm-consent'){this.consent=t.checked;this.render();e.stopPropagation();}
+   if(t?.id==='upgrade-consent'){this.upgradeConsent=Boolean(t.checked);this.render();e.stopPropagation();}
+   const skill=t?.dataset?.autoSkill;
+   if(skill&&Object.hasOwn(this.upgradePolicies,skill)){
+    this.upgradePolicies[skill].enabled=Boolean(t.checked);
+    this.saveUpgradePolicies();this.render();e.stopPropagation();
+   }
+   const targetSkill=t?.dataset?.autoTargetSkill;
+   const tier=Number(t?.dataset?.autoTier);
+   if(targetSkill&&Object.hasOwn(this.upgradePolicies,targetSkill)&&Number.isInteger(tier)&&tier>=0&&tier<MAX_TIERS){
+    const v=Number(t.value);
+    this.upgradePolicies[targetSkill].targets[tier]=Number.isFinite(v)?Math.max(0,Math.min(MAX_OD,v)):0;
+    this.saveUpgradePolicies();e.stopPropagation();
+   }
+  });
+  shadow.addEventListener('input',e=>{
+   if(e.target?.id==='farm-import-json')this.importText=String(e.target.value).slice(0,100000);
+   e.stopPropagation();
   });
   shadow.addEventListener('keydown',e=>e.stopPropagation());
   shadow.addEventListener('keyup',e=>e.stopPropagation());
@@ -65,6 +170,7 @@ export class SmartFarm {
  }
  unmount(){
   this.session++;this.scanning=false;this.sweep?.cancel();this.sweep=null;
+  this.disarmUpgrades('Add-on unloaded; auto-upgrades disarmed.');
   if(this.live)this.stopLive(true);
   if(this.tickInterval)clearInterval(this.tickInterval);
   if(this.keyHandler)window.removeEventListener('keydown',this.keyHandler,true);
@@ -78,7 +184,9 @@ export class SmartFarm {
   if(!c)throw Error('No saved character detected. Play a map once, then try again.');
   const signature=FARM_SKILLS.map(k=>[Number(c[k+'Upgrades'])||0,Number(c[k+'Prestige'])||0]);
   const fingerprint=JSON.stringify(signature);
-  if(c.id!==this.lastCharacterId){if(this.live){this.stopLive(false);this.message='Character changed; live queue updates suspended until you start again.';}this.results=[];this.plan=null;this.modPlans=null;this.lastCharacterId=c.id;this.appliedKey='';this.ppHistory=null;this.lastPpFetch=0;}
+  if(c.id!==this.lastCharacterId){
+   if(this.autoUpgrades)this.disarmUpgrades('Character switched; auto-upgrades stopped.');
+   if(this.live){this.stopLive(false);this.message='Character changed; live queue updates suspended until you start again.';}this.results=[];this.plan=null;this.modPlans=null;this.lastCharacterId=c.id;this.appliedKey='';this.ppHistory=null;this.lastPpFetch=0;}
   else if(this.profileFingerprint!==null&&this.profileFingerprint!==fingerprint){this.pendingRescan=true;}
   this.profileFingerprint=fingerprint;
   this.character=c;
@@ -162,7 +270,9 @@ export class SmartFarm {
   this.render();
  }
  async tick(){
-  if(!this.root||!this.live||this.scanning)return;
+  if(!this.root||(!this.live&&!this.autoUpgrades))return;
+  if(this.autoUpgrades)await this.checkAutoUpgrades();
+  if(!this.live||this.scanning)return;
   try{
    await this.loadState();
    await this.replan();
@@ -282,6 +392,20 @@ export class SmartFarm {
    if(cmd==='farm-save'){await this.savePlaylist();return;}
    if(cmd==='farm-start'){await this.startLive();return;}
    if(cmd==='farm-stop'){this.stopLive(true);this.message='Stopped auto queue. Only the managed queue was cleared.';this.render();return;}
+   if(cmd==='upgrades-arm'){await this.armUpgrades();return;}
+   if(cmd==='upgrades-disarm'){this.disarmUpgrades('Stopped by you. A purchase already queued by the server may still complete.');this.render();return;}
+   if(cmd==='farm-settings-save'){this.save();this.saveUpgradePolicies();this.message='Settings saved locally on this device. Auto-upgrade purchasing is not enabled by saving.';this.render();return;}
+   if(cmd==='farm-settings-export'){this.exportText=configExport(this.s,this.upgradePolicies,FARM_SKILLS);this.message='Backup generated. Copy the text below to keep or transfer your settings; no passwords or tokens are included.';this.render();return;}
+   if(cmd==='farm-settings-import'){
+    const next=configImport(this.importText,defaults,FARM_SKILLS);
+    this.disarmUpgrades('Imported settings. Auto-purchasing remains OFF until you explicitly arm it.');
+    if(this.live)this.stopLive(true);
+    this.s=next.settings;this.upgradePolicies=next.upgrades;
+    this.save();this.saveUpgradePolicies();
+    this.exportText='';this.importText='';this.results=[];this.plan=null;this.modPlans=null;this.scannedAt=0;
+    this.message='Imported and saved settings. Scan again for updated recommendations.';
+    this.render();return;
+   }
   }catch(e){this.fail(e);}
  }
  render(){
@@ -308,6 +432,7 @@ export class SmartFarm {
      (p.reason?'<p class="notice">'+esc(p.reason)+'</p>':'')+
      '<div class="scroll"><table><thead><tr><th>#</th><th>Beatmap ID</th><th>Rate</th><th>Mod</th>'+(ppMode?'<th>Simulated PP</th><th>Previous best</th><th>Weighted gain</th>':'<th>Target</th><th>Est. XP/min</th><th>Fatigue</th>')+'</tr></thead><tbody>'+
      p.rotation.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+x.beatmapId+'</td><td>'+nice(x.rate,2)+'×</td><td>'+esc(x.mod||p.mod)+'</td>'+(ppMode?'<td>'+nice(x.expectedPP,2)+'</td><td>'+nice(x.previousPP,2)+'</td><td>+'+nice(x.ppGain,2)+'</td>':'<td>'+esc(x.target)+'</td><td>'+nice(x.xpPerMinute)+'</td><td>'+nice(x.physicalKept*100,1)+'%</td>')+'</tr>').join('')+'</tbody></table></div>':'<p class="hint">Scan once to calculate a rotation.</p>')+
+   this.renderUpgradeSettings()+
    '<div class="danger"><h3>Live auto queue (explicit opt-in)</h3><p>Replaces the active server queue and its global mod selection with the optimized rotation. Can select NM/HR for the whole queue as fatigue changes, but cannot mix mods within a single queue (unlike per-map rates). It never interrupts a currently playing song. Only use on your logged-in character.</p><label class="consent"><input type="checkbox" id="farm-consent"'+(this.consent?' checked':'')+(this.live?' disabled':'')+'> Replace my current game queue, set session-wide mods (NM/HR), and set Autopilot to Playlist</label>'+
    '<div class="actions"><button id="farm-start"'+(!this.consent||!p?.rotation?.length||this.live||this.starting?' disabled':'')+'>▶ Start live optimizer</button><button id="farm-stop"'+(!this.live&&!this.starting?' disabled':'')+'>■ Stop and clear managed queue</button></div>'+
    '<p class="hint">Live updates use a second connection to the official game WebSocket. The game may have limits; this is experimental, and no live test has been performed. The add-on never skips the currently playing chart. Updates stop when disabled.</p></div>'+
@@ -315,5 +440,40 @@ export class SmartFarm {
    '<p class="hint">PP mode uses your best ranked plays, not accumulated XP. Actual performance, failed plays, and server-side best scores may differ from simulation. No mod is saved with a local playlist. Previous global mods are restored on Stop only while connected.</p>';
   el.innerHTML=html;
  }
- css(){return `:host{font-family:system-ui;color:#ecedf5}:host *{box-sizing:border-box}#farm-screen{display:none;pointer-events:auto;position:fixed;inset:0;background:#060b18ac;justify-content:center;align-items:center;padding:14px}:host([data-open="true"]) #farm-screen{display:flex}.panel{width:min(890px,98vw);max-height:91vh;overflow:auto;background:#181b2d;border:1px solid #586090;border-radius:14px;box-shadow:0 10px 55px #000b}header{position:sticky;top:0;background:#242941;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;z-index:2}h2,h3{margin:0;font-size:18px}main{padding:14px}button{background:#4d569b;color:#fff;border:1px solid #7782c1;border-radius:7px;padding:9px 12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}header button{background:#30374c}.intro,.hint{font-size:12px;color:#c1c7d9}.group{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px}label{font-size:11px;color:#c0c8e9}input,select{display:block;width:100%;padding:7px;background:#12182b;color:#f0effe;border:1px solid #566183;border-radius:6px;margin-top:3px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.summary{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:4px 10px;background:#262f40;padding:10px;border-radius:7px;margin-top:9px}.summary strong{color:#e4e8ff;font-size:19px}.summary span{font-size:11px;color:#9db5ca}.scroll{overflow:auto;max-height:250px;margin:10px 0}table{border-collapse:collapse;width:100%;font-size:11px}th,td{padding:8px;text-align:left;border-bottom:1px solid #374059}th{position:sticky;top:0;background:#2b324a}.danger{border-top:1px solid #636f92;margin-top:15px;padding-top:12px}.danger h3{font-size:14px}.consent{display:flex;align-items:center;gap:7px;font-size:12px}.consent input{width:auto}.notice{font-size:12px;color:#eed9a2}.error{font-size:12px;color:#ff909a}`;}
+ renderUpgradeSettings(){
+  const skills=FARM_SKILLS.map(skill=>{
+   const policy=this.upgradePolicies[skill],current=this.character;
+   const tierCount=Math.max(10,Math.min(MAX_TIERS,10+Math.max(0,Number(current?.[skill+'Prestige'])||0)));
+   const stage=Number(current?.[skill+'Upgrades'])||0;
+   const state=current?{level:current[skill],xp:current[skill+'XP'],upgrades:stage,
+    overdrive:current[skill+'Overdrive'],prestige:current[skill+'Prestige']}:null;
+   const outcome=state?checkUpgrade(state,{...policy,enabled:true},applyUpgrade):null;
+   const currentText=state?' · gear '+stage+'/'+tierCount+' · raw OD '+nice(Number(state.overdrive)||0,2)+
+    (outcome?.preview?' → '+nice(outcome.preview.overdrive,2)+' after next purchase':''):'';
+   const targets=Array.from({length:tierCount},(_,i)=>
+    '<label>#'+(i+1)+' <input type="number" min="0" max="'+MAX_OD+'" step="0.1" data-auto-target-skill="'+skill+
+    '" data-auto-tier="'+i+'" value="'+esc(policy.targets[i])+'"></label>').join('');
+   return '<div class="upgrade-skill"><label class="consent"><input type="checkbox" data-auto-skill="'+skill+
+    '"'+(policy.enabled?' checked':'')+'><b>'+esc(skill)+(skill==='memory'?' (forgets plays)':'')+'</b></label><details><summary>Set target Overdrive for each numbered upgrade'+
+    esc(currentText)+'</summary><p class="hint">0 = buy at minimum required level. A value above 0 waits until the projected TOTAL raw Overdrive after buying this tier meets your target.'+
+    (skill==='memory'?' <b>Memory upgrades can forget earlier plays.</b>':'')+'</p><div class="od-tiers">'+targets+'</div></details></div>';
+  }).join('');
+  return '<section class="danger"><h3>⚙ Auto skill upgrades (OFF by default)</h3>'+
+   '<p class="hint">Set the minimum <b>total raw Overdrive (σ) AFTER buying</b> upgrade #1, #2, and so on, independently for each skill. The planner uses the game\'s real overspend formula, including XP and level cost, and will wait until your target is met. These purchases permanently spend skill levels, and Memory upgrades may erase plays.</p>'+
+   '<p class="hint">Settings are saved per device; switches below do not purchase anything until you arm auto-upgrades. Arm state is never saved, and it stops on character changes, errors or add-on unload.</p>'+
+   '<div class="upgrade-grid">'+skills+'</div>'+
+   '<label class="consent"><input type="checkbox" id="upgrade-consent"'+(this.upgradeConsent?' checked':'')+
+   (this.autoUpgrades?' disabled':'')+'> I authorize automatic purchases of enabled skill upgrades, including their level costs.</label>'+
+   '<div class="actions"><button id="upgrades-arm"'+(this.autoUpgrades||!this.upgradeConsent||this.upgradeChecking?' disabled':'')+
+   '>▶ Arm auto-upgrades</button><button id="upgrades-disarm"'+(!this.autoUpgrades?' disabled':'')+'>■ Stop auto-upgrades</button></div>'+
+   '<p class="hint">Status: '+(this.autoUpgrades?'ACTIVE for character #'+this.autoArmId:'OFF')+
+   ' · at most one upgrade request per 60-second check. '+esc(this.upgradeLog)+'</p>'+
+   '<details class="settings-backup"><summary>💾 Save / transfer Smart Farm settings</summary>'+
+   '<p class="hint">Ordinary planner settings and per-skill targets save automatically to local storage. Backup text can be copied to another device; importing never enables live queue or auto-purchasing.</p>'+
+   '<div class="actions"><button id="farm-settings-save">Save settings now</button><button id="farm-settings-export">Export settings backup</button></div>'+
+   (this.exportText?'<label>Copy this backup JSON<textarea readonly rows="5">'+esc(this.exportText)+'</textarea></label>':'')+
+   '<label>Paste saved settings JSON<textarea id="farm-import-json" rows="4" placeholder="Paste exported Smart Farm settings JSON here">'+esc(this.importText)+'</textarea></label>'+
+   '<button id="farm-settings-import">Import saved settings</button></details></section>';
+ }
+ css(){return `:host{font-family:system-ui;color:#ecedf5}:host *{box-sizing:border-box}#farm-screen{display:none;pointer-events:auto;position:fixed;inset:0;background:#060b18ac;justify-content:center;align-items:center;padding:14px}:host([data-open="true"]) #farm-screen{display:flex}.panel{width:min(890px,98vw);max-height:91vh;overflow:auto;background:#181b2d;border:1px solid #586090;border-radius:14px;box-shadow:0 10px 55px #000b}header{position:sticky;top:0;background:#242941;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;z-index:2}h2,h3{margin:0;font-size:18px}main{padding:14px}button{background:#4d569b;color:#fff;border:1px solid #7782c1;border-radius:7px;padding:9px 12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}header button{background:#30374c}.intro,.hint{font-size:12px;color:#c1c7d9}.group{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px}label{font-size:11px;color:#c0c8e9}input,select{display:block;width:100%;padding:7px;background:#12182b;color:#f0effe;border:1px solid #566183;border-radius:6px;margin-top:3px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.summary{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:4px 10px;background:#262f40;padding:10px;border-radius:7px;margin-top:9px}.summary strong{color:#e4e8ff;font-size:19px}.summary span{font-size:11px;color:#9db5ca}.scroll{overflow:auto;max-height:250px;margin:10px 0}table{border-collapse:collapse;width:100%;font-size:11px}th,td{padding:8px;text-align:left;border-bottom:1px solid #374059}th{position:sticky;top:0;background:#2b324a}.danger{border-top:1px solid #636f92;margin-top:15px;padding-top:12px}.danger h3{font-size:14px}.upgrade-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px}.upgrade-skill{padding:8px;border:1px solid #4e5b7b;border-radius:7px}.upgrade-skill summary{cursor:pointer;font-size:11px;padding:5px 0}.od-tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:5px}.od-tiers input{width:100%}.settings-backup{margin-top:12px;padding:8px;border:1px solid #4e5b7b;border-radius:7px}textarea{width:100%;background:#12182b;color:#eee;border:1px solid #566183;border-radius:6px;padding:9px}.consent{display:flex;align-items:center;gap:7px;font-size:12px}.consent input{width:auto}.notice{font-size:12px;color:#eed9a2}.error{font-size:12px;color:#ff909a}`;}
 }

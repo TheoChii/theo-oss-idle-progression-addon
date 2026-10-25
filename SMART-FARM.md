@@ -1,4 +1,4 @@
-## Smart Farm / Auto Queue (experimental, v0.5.3)
+## Smart Farm / Auto Queue (experimental, v0.5.4)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
@@ -37,6 +37,52 @@ Full-library scans happen when you press **Scan**, then at most every configured
   any live managed queue; switching to PP begins a fresh scan.
   PP scoring never triggers automatic prestige or map downloads.
 
+### Auto skill upgrades — opt-in (v0.5.4)
+
+The bottom of the Smart Farm panel includes a separate **Auto skill
+upgrades** section. Enable one or more of the 11 skills (all toggles OFF on a
+fresh install), and expand each skill to set the raw Overdrive **total you
+want after purchasing** upgrade tier #1, #2, etc. The game base ladder has
+10 upgrades; prestige adds more tiers. The UI exposes up to 30 tier
+targets per skill. Blank/default targets of 0 mean buy as soon as
+the next gear upgrade is affordable. Target 25 on tier #2 means wait
+until a tier-2 purchase would leave *at least 25 total raw Overdrive*.
+
+The planner calculates affordability and projected OD with the game's exact
+`applyUpgrade` math. Overdrive is **earned by overspending levels**, not
+a currency spent to buy upgrades. Buying gear **spends actual XP levels**,
+may lower overall character level and affects ranking metrics; the action
+cannot be automatically undone. Buying Memory gear can forget earlier plays.
+
+Merely checking a skill is not enough. Check the level-spending confirmation
+and click **Arm auto-upgrades**. Every minute, while the game/add-on is open,
+the manager checks the authoritative server's active character and skill
+levels, compares the projected OD to the configured target, and sends at
+most **one** authenticated `POST /v1/me/upgrade` per check. Multiple enabled
+skills are round-robin, preventing one from permanently taking priority.
+During an active play the server may defer a requested purchase. Such
+pending tiers will **not be requested again** until the server confirms that
+the gear level advanced. The user must manually rearm if the game's pending
+purchase never resolves. Server errors stop the checker. Offline guests,
+account/character mismatches and character switches cannot receive a
+purchase. Master arming is **OFF whenever the add-on loads**, no matter what
+individual skill choices you saved. This operates independently of live
+queue optimization. Click **Stop auto-upgrades** to disarm; already queued
+server-side actions can still complete. **Auto-prestige is not included.**
+
+### Saving settings
+
+Normal Smart Farm planner preferences have been saved automatically in
+local storage since v0.5.0. v0.5.4 additionally saves each skill's enabled
+preference and the numbered OD targets. The **Save / transfer Smart Farm
+settings** area lets you save again, export the settings as JSON (copy
+the text into a personal note), and import a prior backup on the same or
+a different device. Importing never arms purchases or starts the live
+queue. Raw session authentication and bearer tokens are never exported.
+All settings are **local to this device and browser profile** and can be
+lost if site storage is cleared. Saving an enabled skill preference does
+not mean auto-upgrades remain active after a restart.
+
 ### Starting safely
 
 1. Open **⚡ Smart Farm**, select a primary skill and fallback, then choose **Mod strategy**: Auto (best whole rotation), No Mod only, or HR only. Enter your current **strained fatigue minutes**. The game keeps its authoritative fatigue on the server and does **not** publish that number through the local add-on database, so this value must be entered or periodically corrected manually.
@@ -61,4 +107,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 16 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 18 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.

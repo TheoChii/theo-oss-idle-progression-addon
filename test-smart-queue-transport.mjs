@@ -16,7 +16,7 @@ globalThis.WebSocket=class {
 const oldSetTimeout=globalThis.setTimeout;
 globalThis.setTimeout=()=>777;
 try{
- const mod=await import('data:text/javascript;base64,'+Buffer.from('const FARM_SKILLS=[];\n'+source).toString('base64'));
+ const mod=await import('data:text/javascript;base64,'+Buffer.from('const FARM_SKILLS=[];const MAX_TIERS=30,MAX_OD=1000000;const makePolicies=(keys)=>Object.fromEntries(keys.map(k=>[k,{enabled:false,targets:Array(30).fill(0)}]));\n'+source).toString('base64'));
  const f=new mod.SmartFarm();
  f.root={};f.character={id:12,local:false};f.lastCharacterId=12;
  f.plan={mod:'HR',rotation:[{beatmapId:1,rate:1.5},{beatmapId:2,rate:1}]};

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const source=await fs.readFile(new URL('./progression-toolkit.addon.js',import.meta.url),'utf8');
-assert(source.includes('v0.5.3'));
+assert(source.includes('v0.5.4'));
 const mod=await import('data:text/javascript;base64,'+Buffer.from(source+'\nexport {friendState,friendPause,friendId,FRIEND_DELAY_MS,FRIEND_QUEUE_LIMIT};').toString('base64'));
 const {friendState,friendPause,friendId,FRIEND_DELAY_MS,FRIEND_QUEUE_LIMIT}=mod;
 assert.equal(friendId('5'),5);
