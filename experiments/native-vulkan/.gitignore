@@ -2,3 +2,6 @@ vulkan-priority-bench
 *.spv
 core
 core.*
+
+# Generated CPU-only profiling bundle (source is committed)
+.cpu-profile-run.mjs
