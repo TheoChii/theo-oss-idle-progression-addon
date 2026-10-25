@@ -179,7 +179,7 @@ const simulate = (
 		accuracy += score.accuracy;
 		duration += (LEAD_IN_MS + endMs) / 1000;
 		grades.push(String(score.grade));
-		ppTotal += pp.calculate(score, rate);
+		ppTotal += pp.calculate(score, rate, mods);
 	}
 
 	const xp: Record<string, number> = {};

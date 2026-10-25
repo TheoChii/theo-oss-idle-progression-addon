@@ -55,7 +55,7 @@ export const ppReady = (): Promise<boolean> => ready ??= (async () => {
  * once per rate, and only the (cheap) performance calculation repeated per run.
  */
 export type PPChart = {
-	calculate(score: PPScore, rate?: number): number;
+	calculate(score: PPScore, rate?: number, mods?: readonly ('HR'|'EZ'|'NF'|'SD'|'PF')[]): number;
 	stars(rate?: number): number;
 	free(): void;
 };
@@ -74,29 +74,31 @@ export const ppChart = (chartText: string, available: boolean): PPChart => {
 		return NOOP_CHART;
 	}
 
-	const byRate = new Map<number, ppjs.DifficultyAttributes>();
-	const difficulty = (rate: number): ppjs.DifficultyAttributes => {
-		let attributes = byRate.get(rate);
+	const byRate = new Map<string, ppjs.DifficultyAttributes>();
+	const difficulty = (rate: number, mods: readonly string[]): ppjs.DifficultyAttributes => {
+		const key = rate+'@'+mods.join('');
+		let attributes = byRate.get(key);
 		if (!attributes) {
-			const calculator = new ppjs.Difficulty({ lazer: false, clockRate: rate });
+			const calculator = new ppjs.Difficulty({ lazer: false, clockRate: rate, mods: mods.join('') });
 			try {
 				attributes = calculator.calculate(map);
 			} finally {
 				calculator.free();
 			}
-			byRate.set(rate, attributes);
+			byRate.set(key, attributes);
 		}
 		return attributes;
 	};
 
 	return {
-		calculate(score, rate = 1) {
+		calculate(score, rate = 1, mods = []) {
 			let performance: ppjs.Performance | undefined;
 			let attributes: ppjs.PerformanceAttributes | undefined;
 			try {
 				performance = new ppjs.Performance({
 					lazer: false,
 					clockRate: rate,
+					mods: mods.join(''),
 					legacyTotalScore: Math.floor(score.score),
 					accuracy: Math.min(1, score.accuracy),
 					combo: score.maxCombo,
@@ -107,7 +109,7 @@ export const ppChart = (chartText: string, available: boolean): PPChart => {
 					n50: score.counts.BAD ?? 0,
 					misses: score.counts.MISS ?? 0,
 				});
-				attributes = performance.calculate(difficulty(rate));
+				attributes = performance.calculate(difficulty(rate, mods));
 				return attributes.pp;
 			} catch {
 				return 0;
@@ -118,7 +120,7 @@ export const ppChart = (chartText: string, available: boolean): PPChart => {
 		},
 		stars(rate = 1) {
 			try {
-				return difficulty(rate).stars;
+				return difficulty(rate, []).stars;
 			} catch {
 				return 0;
 			}
