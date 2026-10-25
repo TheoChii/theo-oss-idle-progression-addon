@@ -5,6 +5,7 @@ import {FARM_SKILLS, optimizeFarm, prestigeReady, fatigueKeep} from './optimizer
 import {optimizePP} from './ppFarm.js';
 import {readBestPP} from './ppHistory.js';
 import {withTimeout} from './scanGuard.js';
+import {gpuScorer,hybridRefineCandidates,benchmarkGpu} from './gpuAssist.js';
 import {createChartCache,createLimiter} from './scanCache.js';
 import {activeModModes,refineBudget,eligibleRefineRows,combineRefinementJobs} from './scanStrategy.js';
 import {applyUpgrade} from '@oss-idle/shared/upgrades';
@@ -17,7 +18,7 @@ const API='https://api.oss.idle.rhythmgamers.net/v1';
 const FOCUS=['all',...FARM_SKILLS];
 const FALLBACK=['accuracy','nonphysical','all','stop',...FARM_SKILLS.filter(s=>s!=='accuracy')];
 const defaults={goal:'xp',ppRank:'gainPerMinute',ppMinGain:0.25,focus:'speed',backup:'accuracy',fatigueMinutes:0,physicalShare:40,cutoff:10,overheadSec:8,slots:10,
- minEfficiency:65,scanInterval:20,modPreference:'auto',autoPlaylist:false,liveQueue:false};
+ minEfficiency:65,scanInterval:20,modPreference:'auto',gpuAssist:false,autoPlaylist:false,liveQueue:false};
 const asNumber=(v,min,max,fallback)=>Number.isFinite(Number(v))?Math.max(min,Math.min(max,Number(v))):fallback;
 const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const nice=(n,d=0)=>Number.isFinite(n)?Number(n).toLocaleString('en-US',{maximumFractionDigits:d}):'—';
@@ -41,6 +42,7 @@ export class SmartFarm {
   this.autoUpgrades=false;this.autoArmId=null;this.upgradeConsent=false;
   this.upgradeChecking=false;this.upgradePending=new Map();this.upgradeLog='';this.upgradeCursor=0;
   this.exportText='';this.importText='';
+  this.gpuReport='Not tested in this oss!idle session.';this.gpuBusy=false;
  }
  save(){
   try{const {liveQueue,autoPlaylist,...safe}=this.s;localStorage.setItem(SETTINGS,JSON.stringify(safe));}catch{}
@@ -225,6 +227,7 @@ export class SmartFarm {
   this.scanning=true;this.error='';this.scanWarning='';const my=++this.session;
   const chartCache=createChartCache();
   const ioLimiter=createLimiter(4);
+  let gpu=null;
   this.setProgress('Starting map scan…');
   try{
    await this.loadState();
@@ -252,6 +255,17 @@ export class SmartFarm {
    };
    let results=await run(survey.requests.map(x=>({...x,rates:screened})),1,'Screening');
    const skillTargets=this.targetsToRefine();
+   if(this.s.gpuAssist){
+    try{
+     this.setProgress('Checking experimental GPU for refinement scoring…');
+     gpu=await gpuScorer();
+     this.gpuReport='Hybrid active: GPU scores alternate refinement candidates, CPU scores the rest and simulates plays.';
+    }catch(e){
+     this.gpuReport='CPU fallback: '+(e?.message||String(e));
+     gpu=null;
+    }
+   }
+   if(my!==this.session)throw Error('Scan cancelled.');
    // The first pass samples the whole library once. Spend three-run
    // refinement only on promising, distinct difficulties for the current
    // farming goal; PP uses projected improvements over existing personal bests.
@@ -260,8 +274,18 @@ export class SmartFarm {
    for(const target of skillTargets){
     for(const mod of modModes){
      const ranked=rankMaps(results.filter(x=>x.mod===mod),{target,overheadSec:this.s.overheadSec,recentPlays:this.recent,medalMultiplier:this.medals});
-     const candidates=eligibleRefineRows(ranked,{goal:this.s.goal,bestPP:this.ppHistory?.best||new Map(),
-      ppRank:this.s.ppRank,overheadSec:this.s.overheadSec,limit:budget});
+     const scoring={goal:this.s.goal,bestPP:this.ppHistory?.best||new Map(),
+      ppRank:this.s.ppRank,overheadSec:this.s.overheadSec,limit:budget};
+     let candidates;
+     if(gpu){
+      try{candidates=await hybridRefineCandidates(ranked,scoring,gpu);}
+      catch(e){
+       gpu.destroy();gpu=null;
+       this.gpuReport='GPU scoring failed; safely reverted to CPU: '+(e?.message||String(e));
+       candidates=eligibleRefineRows(ranked,scoring);
+      }
+     }else candidates=eligibleRefineRows(ranked,scoring);
+     if(my!==this.session)throw Error('Scan cancelled.');
      jobs.push(...refinePlan(candidates,rates,screened,budget));
     }
    }
@@ -280,7 +304,7 @@ export class SmartFarm {
    this.fail(e);
   }}
   finally{
-   chartCache.clear();
+   gpu?.destroy();chartCache.clear();
    if(my===this.session){this.scanning=false;this.sweep=null;this.render();}
   }
  }
@@ -525,6 +549,19 @@ export class SmartFarm {
   try{
    if(cmd==='farm-close'){this.toggle(false);return;}
    if(cmd==='farm-scan'){await this.scan();return;}
+   if(cmd==='farm-gpu-test'){
+    if(this.gpuBusy)return;
+    this.gpuBusy=true;this.gpuReport='Testing WebGPU access, scoring accuracy and CPU/GPU timings…';this.render();
+    try{
+     const b=await benchmarkGpu();
+     this.gpuReport='GPU available ('+b.adapterLabel+'). '+b.count.toLocaleString()+' candidate scores: CPU '+
+      nice(b.cpuMs,2)+' ms, GPU '+nice(b.gpuMs,2)+' ms (includes data transfer), max error '+
+      nice(b.maxError,5)+'. '+(b.gpuMs<b.cpuMs?'GPU was faster for this benchmark.':'CPU was faster for this benchmark; hybrid may be slower.');
+    }catch(e){
+     this.gpuReport='GPU unavailable / benchmark failed: '+(e?.message||String(e))+'. The CPU scanner remains fully functional.';
+    }finally{this.gpuBusy=false;this.render();}
+    return;
+   }
    if(cmd==='farm-cancel'){this.session++;this.sweep?.cancel();this.scanning=false;this.setProgress('Scan cancelled');return;}
    if(cmd==='farm-save'){await this.savePlaylist();return;}
    if(cmd==='farm-start'){await this.startLive();return;}
@@ -563,6 +600,10 @@ export class SmartFarm {
    (!ppMode?field('cutoff','Physical XP cutoff (%)',1,100,1)+field('fatigueMinutes','Strained fatigue minutes (manual)',0,420,1)+field('physicalShare','Physical strain share (%)',0,100,5):field('fatigueMinutes','Strained fatigue minutes (manual)',0,420,1))+field('slots','Queue length',1,50,1)+
    field('overheadSec','Transition overhead (seconds)',0,120,1)+(!ppMode?field('minEfficiency','Minimum relative efficiency (%)',1,100,1):'')+
    field('scanInterval','Full rescan interval (minutes)',10,120,5)+'</div>'+
+   '<section class="notice"><label class="consent"><input type="checkbox" data-setting="gpuAssist"'+(this.s.gpuAssist?' checked':'')+'> Experimental hybrid CPU + GPU candidate scoring</label>'+
+   '<p class="hint">Game simulation remains on CPU. WebGPU scores some refinement candidates while CPU scores the rest; results are checked against CPU math. Only uses GPU if the game exposes it. This might be slower on an older integrated GPU.</p>'+
+   '<button id="farm-gpu-test"'+(this.gpuBusy||this.scanning?' disabled':'')+'>🔎 Benchmark GPU compatibility</button>'+
+   '<p class="hint">'+esc(this.gpuReport)+'</p></section>'+
    '<div class="actions"><button id="farm-scan"'+(this.scanning?' disabled':'')+'>⚡ Scan downloaded maps</button><button id="farm-cancel"'+(!this.scanning?' disabled':'')+'>Cancel scan</button><button id="farm-save"'+(!p?.rotation?.length?' disabled':'')+'>Save managed playlist</button></div>'+
    '<p class="hint">'+esc(this.progress)+(this.scannedAt?' · Last scan '+new Date(this.scannedAt).toLocaleTimeString():'')+'</p>'+
    (this.scanWarning?'<p class="notice">'+esc(this.scanWarning)+'</p>':'')+

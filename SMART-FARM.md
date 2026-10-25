@@ -1,4 +1,4 @@
-## Smart Farm / Auto Queue (experimental, v0.5.7)
+## Smart Farm / Auto Queue (experimental, v0.5.8)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
@@ -166,6 +166,39 @@ often you rescan. No GPU acceleration is used. The new LRU/concurrency
 and scheduling logic is covered by mock tests, not yet benchmarked
 against a user's full library.
 
+### Experimental CPU + GPU hybrid benchmark (v0.5.8)
+
+This build includes an **OFF-by-default** checkbox **Experimental hybrid
+CPU + GPU candidate scoring** and a **Benchmark GPU compatibility**
+button in Smart Farm (Ctrl+Shift+G). Benchmarking is local, sends
+nothing to the game server, and does not arm live queue or upgrades.
+
+Benchmark runs 16,384 independent refinement-score vectors through
+JavaScript CPU math and a WebGPU WGSL compute shader, measuring the
+compute dispatch **plus buffer transfer/readback** (three rounds) and
+checking CPU/GPU numeric agreement. The GPU is used only when
+`navigator.gpu` exposes a usable adapter and the shader compiles;
+Vulkan availability alone is insufficient. Intel HD Graphics 520
+(Gen9) on Fedora Linux may be unsupported by Electron's Chromium.
+No browser launch flags or user GPU security settings are changed.
+
+If the user checks the experimental toggle and scans, the CPU workers
+continue to run official, accurate gameplay simulation and PP
+calculation; for the refinement **ranking step only**, WebGPU computes
+half the candidates' simple priority arithmetic as the CPU scores the
+other half. Both sets are validated, sorted and deduplicated on CPU.
+GPU validation/driver/device errors revert to full CPU candidate
+ranking without losing scan progress. This is intentionally **not**
+an attempt to run the complex official ManiaGame simulation on GPU;
+there is no guaranteed speedup, and the extra GPU overhead can make
+refinement marginally slower. The default OFF setting preserves
+v0.5.7's fast CPU path.
+
+The checkbox is saved locally but never requires using a GPU. Every
+scan and benchmark destroys temporary GPU resources. Existing
+settings export/import includes the boolean option. No new
+account-authorized actions are performed.
+
 ### Starting safely
 
 1. Open **⚡ Smart Farm**, select a primary skill and fallback, then choose **Mod strategy**: Auto (best whole rotation), No Mod only, or HR only. Enter your current **strained fatigue minutes**. The game keeps its authoritative fatigue on the server and does **not** publish that number through the local add-on database, so this value must be entered or periodically corrected manually.
@@ -190,4 +223,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 23 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 24 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.

@@ -31,9 +31,9 @@ const prelude=[
  "const makePolicies=keys=>Object.fromEntries(keys.map(k=>[k,{enabled:false,targets:Array(30).fill(0)}]));",
  "const {gameDb,gameCharacter,recentPlayCounts,medalMultiplier,rankedDifficulties,collectCharts,ratesFor,screenRates,runSweep,rankMaps,refinePlan,optimizeFarm}=globalThis;",
  "const PLAYS_PER_MAP=6;const withTimeout=(label,ms,cb)=>globalThis.__bounded(label,Math.min(ms,35),cb);"+
- "const createChartCache=globalThis.__createChartCache,createLimiter=globalThis.__createLimiter,activeModModes=globalThis.__activeModModes,refineBudget=globalThis.__refineBudget,eligibleRefineRows=globalThis.__eligibleRefineRows,combineRefinementJobs=globalThis.__combineRefinementJobs;"
+ "const gpuScorer=globalThis.__gpuScorer,hybridRefineCandidates=globalThis.__hybridRefineCandidates;const createChartCache=globalThis.__createChartCache,createLimiter=globalThis.__createLimiter,activeModModes=globalThis.__activeModModes,refineBudget=globalThis.__refineBudget,eligibleRefineRows=globalThis.__eligibleRefineRows,combineRefinementJobs=globalThis.__combineRefinementJobs;"
 ].join('\n');
-globalThis.__bounded=actualTimeout;
+globalThis.__bounded=actualTimeout;globalThis.__gpuScorer=async()=>{throw Error('WebGPU disabled in test Electron')};globalThis.__hybridRefineCandidates=async()=>{throw Error('not expected')};
 Object.assign(globalThis,{__createChartCache:createChartCache,__createLimiter:createLimiter,__activeModModes:activeModModes,__refineBudget:refineBudget,__eligibleRefineRows:eligibleRefineRows,__combineRefinementJobs:combineRefinementJobs});
 const {SmartFarm}=await import('data:text/javascript;base64,'+Buffer.from(prelude+'\n'+source).toString('base64'));
 const fresh=()=>{const f=new SmartFarm();f.root={};return f;};
@@ -61,4 +61,5 @@ farm=fresh();await farm.scan();
 assert(farm.progress.includes('Reading downloaded map metadata'));
 assert(farm.error.includes('Downloaded map library timed out'));
 flags.library=false;
+farm=fresh();farm.s.gpuAssist=true;await farm.scan();assert(!farm.scanning&&!farm.error&&farm.progress.startsWith('Ready'));assert(farm.gpuReport.includes('CPU fallback'),'unsupported WebGPU must not interrupt XP map scanning');
 console.log('PASS: phase-by-phase scan; timeout identifies DB/catalog/library; stalled medal API degrades instead of blocking');
