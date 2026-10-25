@@ -57,3 +57,39 @@ Unknown: if corrected code is stable, whether the problem reproduces with oss!id
 2. Do not run another GPU dispatch while the game is open. For future testing, user should save work and close graphics-heavy applications with explicit approval.
 3. For deeper diagnosis, the machine owner may examine the root-only error dump locally before reboot; it may include sensitive GPU memory/context, so sanitize before uploading publicly.
 4. Later use validation layers / modest workloads under supervision, with a stable system, and only then consider IPC integration.
+
+## Controlled retest after static corrections (2026-10-25 09:21–09:23 PDT)
+
+Following explicit user confirmation that oss!idle was closed, checked using
+process listings that the game was not running. The Wayland compositor remained
+active as usual; this was not an idle headless GPU test. Test machine available
+RAM was ~2.8 GiB; significant swap was still in use.
+
+Build and **default refusal** check passed. Under a short, explicit, process-
+scoped `THEO_ALLOW_NATIVE_GPU_BENCH=YES` opt-in and a timeout for each
+command, the patched Vulkan program completed these runs on **real Intel HD
+Graphics 520 (no software fallback)**:
+
+| Vector count | Fence submissions | CPU mean (ms) | Vulkan GPU mean (ms) | Max absolute error | Bad values |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 1 | 0.00294 | 0.35883 | 0 | 0 |
+| 16,384 | 3 | 0.03876 | 0.21111 | 0 | 0 |
+| 262,144 | 2 | 0.68356 | 1.10836 | 0 | 0 |
+
+Immediately after each run, journalctl showed **no new i915 GPU HANG,
+preemption timeout, driver context reset or Vulkan device loss** since
+09:21:30 PDT. The new memory visibility barrier did not prevent successful
+shader execution. **Do not infer causality:** both the barrier and closing
+oss!idle changed, so the earlier failure's root cause remains undetermined.
+The smaller controlled workload was CPU-faster at all tested sizes.
+
+**Stop point:** No 1M vector stress workload or extended repeated load was
+run, deliberately avoiding another desktop-affecting hang. One clean short
+retake is not a general GPU stability guarantee. The prototype remains
+disabled by default and isolated from Smart Farm, with draft PR unmerged.
+
+If users request another staged test, run only after saving work, closing
+GPU-intensive applications, and confirming no GPU hangs in the kernel log.
+Test one changed factor at a time. A future GPU helper would need to prove
+meaningful speedups for heavy simulation kernels; this tiny score kernel
+does not appear to justify IPC or driver risk on the HD 520.

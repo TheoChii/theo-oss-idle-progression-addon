@@ -53,3 +53,13 @@ now includes the explicit visibility dependency and checks device workgroup
 and storage buffer limits before dispatch. These correctness changes were
 compiled and guard-tested, but **no Vulkan workload was re-run**. The
 GPU stability failure is still unresolved; main Smart Farm is untouched.
+
+## Controlled stability retest
+
+On October 25, 2026, after oss!idle was closed, the corrected native compute
+prototype passed short 1K (1 dispatch), 16K (3 dispatches) and 262K
+(2 dispatches) scoring tests with **no new i915 kernel errors**, no device
+loss and exact CPU result agreement. At these sizes the CPU was faster.
+See STABILITY.md for exact timing and caveats. These tests are insufficient
+to declare the GPU stable during gameplay. The default GPU safety interlock
+and draft/unmerged status remain in place.
