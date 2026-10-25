@@ -2,6 +2,7 @@
  * Use only the official read-only library bridge. Browser clients still use
  * SDK IndexedDB; never open the old desktop IDB after its migration. */
 import {withTimeout} from './scanGuard.js';
+import {mapLimit} from './scanCache.js';
 export const desktopLibrary=()=>typeof window!=='undefined'?window.ossIdleDesktop?.library??null:null;
 export const desktopEntries=async(library=desktopLibrary())=>{
  if(!library)return null;
@@ -9,39 +10,40 @@ export const desktopEntries=async(library=desktopLibrary())=>{
  if(!Array.isArray(entries))throw Error('Desktop map library returned invalid folders.');
  return entries.filter(x=>x&&Array.isArray(x.info?.versions));
 };
-export const desktopSets=async(library=desktopLibrary())=>{
- const entries=await desktopEntries(library);
- return entries===null?null:entries.map(x=>x.info);
-};
-export const desktopIndex=async(library=desktopLibrary())=>{
+export const desktopSnapshot=async(library=desktopLibrary())=>{
  const entries=await desktopEntries(library);
  if(entries===null)return null;
- const bySet=new Map();
+ const index=new Map();
+ const sets=[];
  for(const entry of entries){
-  const id=Number(entry.info.id);
-  if(!Number.isSafeInteger(id)||bySet.has(id))continue;
-  bySet.set(id,entry);
+  const id=Number(entry.info?.id);
+  if(!Number.isSafeInteger(id)||index.has(id))continue;
+  index.set(id,entry);sets.push(entry.info);
  }
- return bySet;
+ return {sets,index};
 };
+export const desktopSets=async(library=desktopLibrary())=>(await desktopSnapshot(library))?.sets??null;
+export const desktopIndex=async(library=desktopLibrary())=>(await desktopSnapshot(library))?.index??null;
 const normalized=p=>String(p??'').replaceAll('\\','/').toLowerCase();
 /** Read only the requested charts in one queued set, never whole .osz folders
  * or music files. Call once as each worker becomes ready. */
-export async function desktopJobCharts(library,index,setId,maps){
+export async function desktopJobCharts(library,index,setId,maps,cache,limitRead){
  const entry=index?.get(Number(setId));
  if(!entry)throw Error('Downloaded map folder not found for beatmapset '+setId);
- const charts={};
- for(const map of maps){
-  const version=entry.info?.versions?.find(v=>Number(v.id)===Number(map.beatmapId));
-  const candidate=version?.file;
-  const path=candidate&&entry.files?.find(x=>normalized(x.path)===normalized(candidate))?.path;
-  if(!path)continue; // the worker reports the missing difficulty
-  const bytes=await withTimeout('Reading desktop chart '+map.beatmapId,15000,
-   ()=>library.read('maps',entry.name,path));
-  if(bytes){
-   if(typeof bytes==='string')charts[map.beatmapId]=bytes;
-   else charts[map.beatmapId]=new TextDecoder().decode(bytes);
-  }
- }
- return charts;
+ const paths=new Map((entry.files||[]).map(f=>[normalized(f.path),f.path]));
+ const versions=new Map((entry.info?.versions||[]).map(v=>[Number(v.id),v]));
+ const unique=[...new Set(maps.map(map=>Number(map.beatmapId)))];
+ const values=await mapLimit(unique,4,async id=>{
+  const cached=cache?.get(setId,id);
+  if(cached!==undefined)return [id,cached];
+  const path=paths.get(normalized(versions.get(id)?.file));
+  if(!path)return [id,undefined];
+  const task=()=>withTimeout('Reading desktop chart '+id,15000,()=>library.read('maps',entry.name,path));
+  const bytes=limitRead?await limitRead(task):await task();
+  if(!bytes)return [id,undefined];
+  const chart=typeof bytes==='string'?bytes:new TextDecoder().decode(bytes);
+  cache?.put(setId,id,chart);
+  return [id,chart];
+ });
+ return Object.fromEntries(values.filter(([,text])=>text!==undefined));
 }

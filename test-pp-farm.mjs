@@ -40,7 +40,8 @@ assert.equal(bigger.rotation[0].beatmapId,11,'raw PP strategy favors largest PP 
 const {readFile}=await import('node:fs/promises');
 const [farm,worker,pp]=await Promise.all(['src/smartFarm.js','src/engine/sim.worker.ts','src/engine/pp.ts'].map(x=>readFile(x,'utf8')));
 assert(farm.includes("if(this.s.goal==='pp')return [{kind:'pp'}];"));
-assert(farm.includes("if(this.s.goal==='pp')void this.scan();"));
+assert(farm.includes("(k==='modPreference'&&previousMod!==this.s.modPreference)"));
+assert(farm.includes("this.render();void this.scan();"));
 assert(farm.includes("this.modPlans={NM:optimizePP"));
 assert(worker.includes('pp.calculate(score, rate, mods)'));
 assert(pp.includes("mods: mods.join('')"));

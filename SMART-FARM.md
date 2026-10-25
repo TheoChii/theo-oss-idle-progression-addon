@@ -1,4 +1,4 @@
-## Smart Farm / Auto Queue (experimental, v0.5.6)
+## Smart Farm / Auto Queue (experimental, v0.5.7)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
@@ -134,6 +134,38 @@ with mocked game bridges; no authenticated live desktop test has been
 performed. Existing settings, queue approval and upgrade safety are
 unchanged.
 
+### Faster map scanning (v0.5.7)
+
+Smart Farm stays CPU-based. On desktop it now makes **up to four concurrent
+.osu read requests in total**, even while several workers process sets in
+parallel. Browser clients still use the official IndexedDB path.
+The desktop bridge lists the downloaded folders just once per scan,
+then shares that snapshot across Screening/Refining. Each chart's text
+may be cached in a bounded **64 MiB (estimated UTF-16)** scan-only LRU;
+the cache is cleared on scan completion, cancellation, or error.
+
+The selected **Mod strategy** controls which mods are simulated:
+No Mod only -> NM, HR only -> HR, Auto -> both. Changing the
+preference invalidates the old plan and starts a fresh scan; a managed
+live queue is stopped before changing strategy. Displayed comparisons
+show 'not scanned' for a deliberately skipped mode.
+
+The initial Screening remains broad at sampled unlocked rates. The
+expensive three-run Refining phase now adapts its candidate count
+(min 8, max 35 per target and mod; usually 2x queue size), filters
+weak or high-failure candidates, ranks PP opportunities by predicted
+gain beyond your existing best, and merges desired playback rates
+across goals and mods. A cautious 2% PP margin reduces false negatives
+from one-run variance, but any capped refinement can miss a borderline
+candidate; use a larger queue length when seeking broader refinements.
+Worker jobs with more mapped rate variants are started earlier, which
+improves work distribution without changing the gameplay simulation.
+
+The saved scan interval is not a speed control; it determines how
+often you rescan. No GPU acceleration is used. The new LRU/concurrency
+and scheduling logic is covered by mock tests, not yet benchmarked
+against a user's full library.
+
 ### Starting safely
 
 1. Open **⚡ Smart Farm**, select a primary skill and fallback, then choose **Mod strategy**: Auto (best whole rotation), No Mod only, or HR only. Enter your current **strained fatigue minutes**. The game keeps its authoritative fatigue on the server and does **not** publish that number through the local add-on database, so this value must be entered or periodically corrected manually.
@@ -158,4 +190,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 22 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 23 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.

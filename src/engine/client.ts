@@ -18,7 +18,7 @@ import { medalXPMultiplier } from '@oss-idle/shared/achievements/catalogue';
 import { hasUnlock } from '@oss-idle/shared/rebirth';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { withTimeout } from '../scanGuard.js';
-import { desktopLibrary, desktopSets, desktopIndex, desktopJobCharts } from '../desktopMaps.js';
+import { desktopLibrary, desktopSnapshot, desktopIndex, desktopJobCharts } from '../desktopMaps.js';
 import createSimWorker from 'worker:./sim.worker';
 import type {
 	SimError,
@@ -54,6 +54,7 @@ const isSimulatable = (version: { mode: number; keys: number }) =>
  * collapsed into "no maps found".
  */
 type LibrarySurvey = {
+ folderIndex?: Map<number,unknown>;
 	sets: number;
 	versions: number;
 	/** Difficulties excluded for not being 4K mania. */
@@ -135,8 +136,9 @@ export const collectCharts = async (ranked?: ReadonlySet<number>): Promise<Libra
 	const desktop = desktopLibrary();
 	// On 1.2.5.0 desktop the game deletes its IndexedDB beatmaps database
 	// after migrating to folders. Never reopen and re-create that deleted DB.
-	const sets = desktop ? await desktopSets(desktop) : await beatmapStore.sets();
-	return planSweep(sets ?? [], ranked);
+	const snapshot = desktop ? await desktopSnapshot(desktop) : null;
+	const sets = desktop ? snapshot?.sets : await beatmapStore.sets();
+	return {...planSweep(sets ?? [], ranked),folderIndex:snapshot?.index};
 };
 
 /**
@@ -169,13 +171,16 @@ type Job = { setId: number; maps: SimRequest[] };
 /** Simulate the current character against `requests`, a set at a time per worker. */
 export const runSweep = async (
 	requests: SimRequest[],
-	{ runs = 3, characterId, memoryAhead = 0, fatigueMinutes = 0, modModes = ['NM'] as ('NM' | 'HR')[] }: {
+	{ runs = 3, characterId, memoryAhead = 0, fatigueMinutes = 0, modModes = ['NM'] as ('NM' | 'HR')[], chartCache, ioLimiter, folderIndex: sharedFolders }: {
 		runs?: number;
 		characterId?: number;
 		/** Plays added to each map's count before seeding memory - see `PLAYS_PER_MAP`. */
 		memoryAhead?: number;
 		fatigueMinutes?: number;
 		modModes?: ('NM' | 'HR')[];
+		chartCache?: {get(setId:number,id:number):string|undefined;put(setId:number,id:number,text:string):void};
+		ioLimiter?: <T>(task:()=>Promise<T>)=>Promise<T>;
+		folderIndex?: Map<number,unknown>;
 	} = {},
 	onProgress?: (progress: SweepProgress) => void,
 ): Promise<Sweep> => {
@@ -192,7 +197,7 @@ export const runSweep = async (
 		Number(character.memoryResetAt) || 0,
 	));
 	const desktop = desktopLibrary();
-	const folderIndex = desktop ? await withTimeout('Desktop chart folder index',15000,()=>desktopIndex(desktop)) : null;
+	const folderIndex = desktop ? (sharedFolders ?? await withTimeout('Desktop chart folder index',15000,()=>desktopIndex(desktop))) : null;
 	const divine = hasUnlock(Number(character.generation) || 1, 'DIVINE');
 
 	const queue: Job[] = [];
@@ -207,6 +212,9 @@ export const runSweep = async (
 		}
 	}
 
+	// Longest/largest jobs first balances slow stragglers across the CPU worker
+	// pool. This does not skip candidates or change simulation accuracy.
+	queue.sort((a,b)=>b.maps.reduce((v,x)=>v+x.rates.length,0)-a.maps.reduce((v,x)=>v+x.rates.length,0));
 	const results: SimResult[] = [];
 	const errors: SimError[] = [];
 	let done = 0;
@@ -265,7 +273,7 @@ export const runSweep = async (
 		// Browser workers continue to read IndexedDB directly.
 		void (async () => {
 			const charts = desktop && folderIndex
-				? await desktopJobCharts(desktop,folderIndex,job.setId,job.maps)
+				? await desktopJobCharts(desktop,folderIndex,job.setId,job.maps,chartCache,ioLimiter)
 				: undefined;
 			if(over||!slots.has(slot))return;
 			slot.heardAt=Date.now();
