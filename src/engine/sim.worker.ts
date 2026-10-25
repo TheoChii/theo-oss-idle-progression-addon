@@ -227,7 +227,7 @@ const run = async (job: WorkerRequest): Promise<void> => {
 
 		let charts: Record<number, string>;
 		try {
-			charts = await beatmapStore.charts(setId);
+			charts = job.charts ?? await beatmapStore.charts(setId);
 		} catch (e) {
 			// The whole set is unreadable - report each difficulty and move on.
 			for (const { beatmapId } of job.maps) post({ type: 'map', beatmapId, error: message(e) });

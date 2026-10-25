@@ -17,6 +17,8 @@ import {
 import { medalXPMultiplier } from '@oss-idle/shared/achievements/catalogue';
 import { hasUnlock } from '@oss-idle/shared/rebirth';
 import { rateSteps } from '@oss-idle/shared/rate';
+import { withTimeout } from '../scanGuard.js';
+import { desktopLibrary, desktopSets, desktopIndex, desktopJobCharts } from '../desktopMaps.js';
 import createSimWorker from 'worker:./sim.worker';
 import type {
 	SimError,
@@ -129,8 +131,13 @@ export const planSweep = (sets: readonly PlannableSet[], ranked?: ReadonlySet<nu
  * so a large library never has to sit in main-thread memory - a difficulty whose
  * chart turns out to be missing is reported as a per-map error instead.
  */
-export const collectCharts = async (ranked?: ReadonlySet<number>): Promise<LibrarySurvey> =>
-	planSweep(await beatmapStore.sets(), ranked);
+export const collectCharts = async (ranked?: ReadonlySet<number>): Promise<LibrarySurvey> => {
+	const desktop = desktopLibrary();
+	// On 1.2.5.0 desktop the game deletes its IndexedDB beatmaps database
+	// after migrating to folders. Never reopen and re-create that deleted DB.
+	const sets = desktop ? await desktopSets(desktop) : await beatmapStore.sets();
+	return planSweep(sets ?? [], ranked);
+};
 
 /**
  * How many workers to run.
@@ -174,17 +181,18 @@ export const runSweep = async (
 ): Promise<Sweep> => {
 	// Which character to simulate is the player's choice when they have made
 	// one, because the client's own answer lives in module state we cannot read.
-	const character = characterId !== undefined
-		? await gameCharacter.byId(characterId)
-		: await gameCharacter.live();
+	const character = await withTimeout('Simulation character lookup',12000,()=>
+		characterId !== undefined ? gameCharacter.byId(characterId) : gameCharacter.live());
 	if (!character) throw new Error('No character found in the game database.');
 
 	// Memory trains per map, from how often this character has played it since
 	// memory was last prestiged.
-	const playCounts = await playCountsSince(
+	const playCounts = await withTimeout('Memory play-count history',12000,()=>playCountsSince(
 		Number(character.id),
 		Number(character.memoryResetAt) || 0,
-	);
+	));
+	const desktop = desktopLibrary();
+	const folderIndex = desktop ? await withTimeout('Desktop chart folder index',15000,()=>desktopIndex(desktop)) : null;
 	const divine = hasUnlock(Number(character.generation) || 1, 'DIVINE');
 
 	const queue: Job[] = [];
@@ -252,18 +260,26 @@ export const runSweep = async (
 		}
 		slot.pending = [...job.maps];
 		slot.heardAt = Date.now();
-		slot.worker.postMessage({
-			type: 'job',
-			setId: job.setId,
-			character: character as unknown as Record<string, unknown>,
-			divine,
-			runs,
-			fatigueMinutes,
-			modModes,
-			maps: job.maps.map(({ beatmapId, rates }) => ({
-				beatmapId, rates, timesPlayed: (playCounts[beatmapId] ?? 0) + memoryAhead,
-			})),
-		} satisfies WorkerRequest);
+		// Desktop folders are exposed on window, not to the worker. Transfer
+		// only this mapset's .osu charts; let the worker decode/simulate them.
+		// Browser workers continue to read IndexedDB directly.
+		void (async () => {
+			const charts = desktop && folderIndex
+				? await desktopJobCharts(desktop,folderIndex,job.setId,job.maps)
+				: undefined;
+			if(over||!slots.has(slot))return;
+			slot.heardAt=Date.now();
+			slot.worker.postMessage({
+				type:'job',
+				setId:job.setId,
+				character:character as unknown as Record<string, unknown>,
+				divine,runs,fatigueMinutes,modModes,
+				charts,
+				maps:job.maps.map(({beatmapId,rates})=>({
+					beatmapId,rates,timesPlayed:(playCounts[beatmapId]??0)+memoryAhead,
+				})),
+			} satisfies WorkerRequest);
+		})().catch(e=>lose(slot,'Desktop chart read failed: '+(e instanceof Error?e.message:String(e))));
 	};
 
 	/**
@@ -342,10 +358,10 @@ const API_URL = 'https://api.oss.idle.rhythmgamers.net';
  * Medals are awarded and stored by the server only, so a guest character holds
  * none, and an account character's set is read from its public profile.
  */
-export const medalMultiplier = async (character: CharacterRow): Promise<number | undefined> => {
+export const medalMultiplier = async (character: CharacterRow, signal?: AbortSignal): Promise<number | undefined> => {
 	if (character.local) return 1;
 	try {
-		const res = await fetch(`${API_URL}/v1/characters/${character.id}/medals`);
+		const res = await withTimeout('Medal API',9000,timeoutSignal => fetch(`${API_URL}/v1/characters/${character.id}/medals`, {signal:signal ?? timeoutSignal}));
 		if (!res.ok) return undefined;
 		const { held } = await res.json() as { held: { id: string }[] };
 		return medalXPMultiplier(held.map(medal => medal.id));
@@ -362,9 +378,9 @@ export const medalMultiplier = async (character: CharacterRow): Promise<number |
  * live difficulty and answers any other as unranked, which the client plays
  * locally for no XP. The intro set is in the catalog but is not live.
  */
-export const rankedDifficulties = async (): Promise<Set<number> | undefined> => {
+export const rankedDifficulties = async (signal?: AbortSignal): Promise<Set<number> | undefined> => {
 	try {
-		const res = await fetch(`${API_URL}/v1/beatmap/catalog`);
+		const res = await withTimeout('Ranked map catalog API',12000,timeoutSignal => fetch(`${API_URL}/v1/beatmap/catalog`,{signal:signal ?? timeoutSignal}));
 		if (!res.ok) return undefined;
 		const { intro, beatmaps } = await res.json() as {
 			intro?: { id: number };

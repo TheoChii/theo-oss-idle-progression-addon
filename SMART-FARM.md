@@ -1,4 +1,4 @@
-## Smart Farm / Auto Queue (experimental, v0.5.5)
+## Smart Farm / Auto Queue (experimental, v0.5.6)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
@@ -105,6 +105,35 @@ the existing server queue can continue autonomously; the Stop button
 will warn if it could not clear the server queue. No real signed-in
 server session has yet verified this behavior.
 
+### Downloaded-map scan fix (v0.5.6)
+
+On oss!idle **v1.2.5.0 desktop**, beatmaps reside in **map folders**
+instead of the browser's IndexedDB. The older SDK beatmap-store API
+could no longer see those downloaded charts. Smart Farm now uses the
+game's official read-only desktop library bridge: it lists only the
+`maps` folders and reads the requested .osu charts lazily for each
+simulated mapset. Simulation workers receive only the current set's
+text, never the full song library in memory. Browser players retain
+the original IndexedDB worker path.
+
+Instead of waiting indefinitely at 'Reading character and downloaded
+maps', the scan shows each initialization stage and uses bounded
+timeouts. If a database read or a map-folder listing stalls, an error
+identifies that step so you can check the game/desktop map library
+or restart the client. **The online medal request does not hold up
+scanning:** if it fails, the planner uses 1x and displays a warning
+about potentially understated XP. The ranked map catalog is still
+required for online XP and PP so unranked maps are never silently
+treated as ranked.
+
+To use the fix, update to v0.5.6, open Smart Farm (Ctrl+Shift+G),
+click **Scan downloaded maps**, and observe the progress phases.
+A restart may be needed if oss!idle's IndexedDB-to-folder migration
+is still running. The desktop-folder logic and timeouts are tested
+with mocked game bridges; no authenticated live desktop test has been
+performed. Existing settings, queue approval and upgrade safety are
+unchanged.
+
 ### Starting safely
 
 1. Open **⚡ Smart Farm**, select a primary skill and fallback, then choose **Mod strategy**: Auto (best whole rotation), No Mod only, or HR only. Enter your current **strained fatigue minutes**. The game keeps its authoritative fatigue on the server and does **not** publish that number through the local add-on database, so this value must be entered or periodically corrected manually.
@@ -129,4 +158,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 20 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 22 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
