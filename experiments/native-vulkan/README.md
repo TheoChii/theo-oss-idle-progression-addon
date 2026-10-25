@@ -30,7 +30,7 @@ The graphics device still enumerated afterward. At the time, several oss!idle pr
 **Do not run this during gameplay or deploy it into Smart Farm.** GPU context resets can temporarily freeze the desktop or the game.
 
 ## Safe build and safety interlock
-From this directory, 'make all' compiles an executable; it does not dispatch GPU work. The executable is gitignored. Calling the program normally REFUSES Vulkan execution and prints a warning; explicit environment variable THEO_ALLOW_NATIVE_GPU_BENCH=YES is required before it will dispatch. Do not set that globally or use it without investigating the GPU hang and saving your work first. 'make bench' also refuses to run without explicit acknowledgement. No unattended jobs are installed.
+From this directory, 'make all' compiles an executable; it does not dispatch GPU work. The executable is gitignored. Calling the program normally REFUSES Vulkan execution and prints a warning; explicit environment variable THEO_ALLOW_NATIVE_GPU_BENCH=YES is required before it will dispatch. Do not set that globally or use it without investigating the GPU hang and saving your work first. The multi-size GPU stress target 'make bench' has been removed to avoid accidental dispatch. 'make safe-check' tests only the default safety refusal. No unattended jobs are installed.
 
 Build dependencies: g++, make, vulkan-loader-devel, vulkan-headers, libshaderc-devel, mesa-vulkan-drivers.
 
@@ -44,3 +44,12 @@ This is a research prototype only. In oss!idle, contextIsolation=true and nodeIn
 
 ## Next steps
 Investigate i915 GPU hang; do not add more GPU stress while oss!idle is active. If stability is established, benchmark startup and interprocess transfer, then assess whether offloading a substantial simulation workload is even worthwhile. Keep the v0.5.9 CPU scanner as production default.
+
+## Follow-up static stability audit
+
+Read STABILITY.md for the read-only kernel and source review. The original
+benchmark lacked a COMPUTE_SHADER-to-HOST_READ memory barrier. main.cpp
+now includes the explicit visibility dependency and checks device workgroup
+and storage buffer limits before dispatch. These correctness changes were
+compiled and guard-tested, but **no Vulkan workload was re-run**. The
+GPU stability failure is still unresolved; main Smart Farm is untouched.

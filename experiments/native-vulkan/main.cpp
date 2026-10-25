@@ -102,6 +102,15 @@ static void run(const std::string& path,uint32_t count,int rounds){
   }
  }
  if(!gpu)throw std::runtime_error("No Intel integrated Vulkan GPU found. CPU/software Vulkan is intentionally excluded.");
+ // Check the shader's storage buffers and the intended workgroup count
+ // against device limits before creating resources (no GPU dispatch here).
+ const uint32_t groups=(count+63u)/64u;
+ if(groups>props.limits.maxComputeWorkGroupCount[0] ||
+    64u>props.limits.maxComputeWorkGroupSize[0] ||
+    64u>props.limits.maxComputeWorkGroupInvocations ||
+    static_cast<uint64_t>(count)*sizeof(Row)>props.limits.maxStorageBufferRange ||
+    static_cast<uint64_t>(count)*sizeof(float)>props.limits.maxStorageBufferRange)
+  throw std::runtime_error("Benchmark exceeds Intel GPU compute/storage limits.");
  uint32_t familyCount=0;vkGetPhysicalDeviceQueueFamilyProperties(gpu,&familyCount,nullptr);
  std::vector<VkQueueFamilyProperties> families(familyCount);
  vkGetPhysicalDeviceQueueFamilyProperties(gpu,&familyCount,families.data());
@@ -161,6 +170,14 @@ static void run(const std::string& path,uint32_t count,int rounds){
  vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);
  vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_COMPUTE,pl,0,1,&ds,0,nullptr);
  vkCmdDispatch(cmd,(count+63)/64,1,1);
+ // Khronos' shader-write -> CPU-read example requires an explicit memory
+ // dependency. Host-coherent memory alone does not replace this barrier.
+ VkMemoryBarrier visibility{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+ visibility.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;
+ visibility.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+ vkCmdPipelineBarrier(cmd,
+  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,
+  0,1,&visibility,0,nullptr,0,nullptr);
  CHECK_VK(vkEndCommandBuffer(cmd));
  VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
  VkFence fence;CHECK_VK(vkCreateFence(dev,&fi,nullptr,&fence));
