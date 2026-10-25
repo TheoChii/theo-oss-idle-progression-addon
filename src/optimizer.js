@@ -23,16 +23,16 @@ export const findTargets=(states,focus,backup,fatigueMinutes,cutoff=.1)=>{
 const asCounts=v=>v instanceof Map?new Map(v):new Map(Object.entries(v||{}).map(([k,n])=>[Number(k),Number(n)||0]));
 export function optimizeFarm(input){
  const {results=[],recent=new Map(),states={},focus='speed',backup='accuracy',fatigueMinutes=0,
-   cutoff=.1,overheadSec=8,physicalShare=.4,slots=10,minEfficiency=.65,medals=1}=input||{};
- const valid=results.filter(map=>map&&Number.isSafeInteger(map.beatmapId)&&map.beatmapId>0&&Number(map.durationSec)>0
+   cutoff=.1,overheadSec=8,physicalShare=.4,slots=10,minEfficiency=.65,medals=1,mod='NM'}=input||{};
+ const valid=results.filter(map=>map&&(map.mod||'NM')===mod&&Number.isSafeInteger(map.beatmapId)&&map.beatmapId>0&&Number(map.durationSec)>0
    &&Number.isFinite(Number(map.rate))&&map.failRate<=.5&&map.xp&&typeof map.xp==='object');
  const counts=asCounts(recent), rotation=[],used=new Set(),steps=Math.max(1,Math.min(100,Math.floor(slots)||10));
  let fatigue=Math.max(0,Math.min(420,Number(fatigueMinutes)||0));
  let lastTarget='',switched=false,explanations=[];
- if(!valid.length)return {rotation,reason:'No successfully simulated playable maps.',fatigueAfter:fatigue,switched};
+ if(!valid.length)return {mod,rotation,reason:'No successfully simulated playable maps.',fatigueAfter:fatigue,switched,expectedPerMinute:0};
  for(let i=0;i<steps;i++){
   const target=findTargets(states,focus,backup,fatigue,cutoff);
-  if(!target.skills.length)return {rotation,reason:target.reason||'All requested skills are prestige-ready.',fatigueAfter:fatigue,switched};
+  if(!target.skills.length)return {mod,rotation,reason:target.reason||'All requested skills are prestige-ready.',fatigueAfter:fatigue,switched,expectedPerMinute:0};
   if(target.target!==focus)switched=true;
   if(target.reason&&!explanations.includes(target.reason))explanations.push(target.reason);
   lastTarget=target.target;
@@ -59,6 +59,8 @@ export function optimizeFarm(input){
   const duration=candidate.durationSec/60;
   fatigue=Math.max(0,Math.min(420,fatigue+duration*share-.4*(duration*(1-share)+Math.max(0,overheadSec)/60)));
  }
- return {rotation,reason:explanations.join(' '),fatigueAfter:fatigue,lastTarget,switched,
-  expectedPerMinute:rotation.length?rotation.reduce((a,m)=>a+m.xpPerMinute,0)/rotation.length:0};
+ const totalXp=rotation.reduce((a,m)=>a+m.expectedXp,0);
+ const totalSeconds=rotation.reduce((a,m)=>a+m.durationSec+Math.max(0,overheadSec),0);
+ return {mod,rotation,reason:explanations.join(' '),fatigueAfter:fatigue,lastTarget,switched,
+  expectedPerMinute:totalSeconds>0?60*totalXp/totalSeconds:0};
 }

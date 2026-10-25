@@ -28,6 +28,7 @@ import CharacterBot from '@oss-idle/shared/sim/bots/character';
 import { makeOrderedSkills } from '@oss-idle/shared/sim/skills/factory';
 import Memory from '@oss-idle/shared/sim/skills/memory';
 import { tiredSkills, fatigueLevel, warmup } from '@oss-idle/shared/fatigue';
+import { modXp } from '@oss-idle/shared/mods';
 import { beatmapStore } from '@oss-idle/addon-sdk';
 import { ppChart, ppReady, type PPChart } from './pp.js';
 import type {
@@ -129,7 +130,9 @@ const simulate = (
 	pp: PPChart,
 	timesPlayed: number,
 	fatigueMinutes = 0,
+	mod: 'NM' | 'HR' = 'NM',
 ): Omit<SimResult, 'setId' | 'beatmapId'> => {
+	const mods: ['HR'] | [] = mod === 'HR' ? ['HR'] : [];
 	const totals: Record<string, number> = {};
 	const grades: string[] = [];
 	let accuracy = 0;
@@ -142,17 +145,17 @@ const simulate = (
 		const baseSkills=skillsFrom(character,timesPlayed);
 		const tired=tiredSkills(baseSkills,fatigueLevel(fatigueMinutes),warmup(fatigueMinutes,Number(character.staminaUpgrades)||0));
 		const bot = new CharacterBot(tired);
-		// Only `divine` and `rate` - exactly what the server passes in `simulateAndStore`,
+		// Use the real timing windows for the simulated mod and playback rate.
 		// and what the client's local play passes. `scrollMs` is left at its
 		// default (600): it is the bot's visibility span, a constant of the
 		// simulation, not the player's scroll-speed setting. Only the live
 		// renderer passes that, because it is about drawing.
-		const game = new ManiaGame(chart, bot, { divine, rate });
+		const game = new ManiaGame(chart, bot, { divine, rate, mods });
 
 		game.update(game.songEndMs + 2000);
 
 		const score = game.score;
-		const xp = bot.getSkillsXP(chart.totalLength / rate, score) as Record<string, number>;
+		const xp = modXp(bot.getSkillsXP(chart.totalLength / rate, score) as Record<string, number>, mods);
 
 		let runTotal = 0;
 		for (const [skill, value] of Object.entries(xp)) {
@@ -192,6 +195,7 @@ const simulate = (
 
 	return {
 		rate,
+		mod,
 		stars: pp.stars(rate),
 		xp,
 		totalXp,
@@ -216,7 +220,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * together, rather than one read per difficulty.
  */
 const run = async (job: WorkerRequest): Promise<void> => {
-	const { setId, character, divine, runs, fatigueMinutes = 0 } = job;
+	const { setId, character, divine, runs, fatigueMinutes = 0, modModes = ['NM'] } = job;
 	try {
 		// One wasm init per worker, before any chart is parsed for pp.
 		const ppAvailable = await ppReady();
@@ -243,10 +247,14 @@ const run = async (job: WorkerRequest): Promise<void> => {
 				const decoded = decode(chart);
 				let failStreak = 0;
 				for (const rate of [...rates].sort((a, b) => a - b)) {
-					await settle();
-					const result = simulate(decoded, rate, character, divine, Math.max(1, runs || 1), pp, timesPlayed, fatigueMinutes);
-					post({ type: 'result', result: { setId, beatmapId, ...result } });
-					failStreak = result.failRate === 1 ? failStreak + 1 : 0;
+					let allFail = true;
+					for (const mod of modModes) {
+						await settle();
+						const result = simulate(decoded, rate, character, divine, Math.max(1, runs || 1), pp, timesPlayed, fatigueMinutes, mod);
+						post({ type: 'result', result: { setId, beatmapId, ...result } });
+						if (result.failRate < 1) allFail = false;
+					}
+					failStreak = allFail ? failStreak + 1 : 0;
 					if (failStreak >= FAILS_TO_STOP) break;
 				}
 				post({ type: 'map', beatmapId });

@@ -8,7 +8,7 @@ const SETTINGS='oss-idle-addon:theo-smart-farm-v1';
 const FOCUS=['all',...FARM_SKILLS];
 const FALLBACK=['accuracy','nonphysical','all','stop',...FARM_SKILLS.filter(s=>s!=='accuracy')];
 const defaults={focus:'speed',backup:'accuracy',fatigueMinutes:0,physicalShare:40,cutoff:10,overheadSec:8,slots:10,
- minEfficiency:65,scanInterval:20,autoPlaylist:false,liveQueue:false};
+ minEfficiency:65,scanInterval:20,modPreference:'auto',autoPlaylist:false,liveQueue:false};
 const asNumber=(v,min,max,fallback)=>Number.isFinite(Number(v))?Math.max(min,Math.min(max,Number(v))):fallback;
 const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const nice=(n,d=0)=>Number.isFinite(n)?Number(n).toLocaleString('en-US',{maximumFractionDigits:d}):'—';
@@ -17,9 +17,9 @@ export class SmartFarm {
  constructor(){
   this.s={...defaults};try{const old=JSON.parse(localStorage.getItem(SETTINGS)||'{}');for(const k of Object.keys(defaults)){if(Object.hasOwn(old,k)&&k!=='liveQueue'&&k!=='autoPlaylist')this.s[k]=old[k];}}catch{}
   this.scanning=false;this.live=false;this.sweep=null;this.results=[];this.recent=new Map();this.medals=1;
-  this.character=null;this.plan=null;this.root=null;this.shadow=null;this.visible=false;this.error='';this.message='';
+  this.character=null;this.plan=null;this.modPlans=null;this.root=null;this.shadow=null;this.visible=false;this.error='';this.message='';
   this.progress='Not scanned';this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
-  this.socket=null;this.serverQueue=null;this.socketCharacterId=null;this.playActive=false;this.lastChange=0;this.previousMode=null;
+  this.socket=null;this.serverQueue=null;this.socketCharacterId=null;this.playActive=false;this.lastChange=0;this.previousMode=null;this.previousMods=null;
   this.tickInterval=null;this.keyHandler=null;this.consent=false;this.session=0;this.starting=false;
   this.pendingRescan=false;this.writing=false;this.profileFingerprint=null;
  }
@@ -86,7 +86,7 @@ export class SmartFarm {
    const screened=screenRates(rates);
    const run=async(requests,runs,label)=>{
     this.setProgress(label+' · '+requests.length+' maps');
-    const sweep=await runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0)},
+    const sweep=await runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),modModes:['NM','HR']},
       progress=>{if(my===this.session&&progress.done%5===0)this.setProgress(label+' '+progress.done+'/'+progress.total);});
     this.sweep=sweep;const answer=await sweep.finished;
     if(answer.cancelled||my!==this.session)throw Error('Scan cancelled.');
@@ -96,16 +96,18 @@ export class SmartFarm {
    const skillTargets=this.targetsToRefine();
    const jobs=new Map();
    for(const target of skillTargets){
-    const ranked=rankMaps(results,{target,overheadSec:this.s.overheadSec,recentPlays:this.recent,medalMultiplier:this.medals});
-    for(const map of refinePlan(ranked,rates,screened,35))jobs.set(map.beatmapId,map);
+    for(const mod of ['NM','HR']){
+     const ranked=rankMaps(results.filter(x=>x.mod===mod),{target,overheadSec:this.s.overheadSec,recentPlays:this.recent,medalMultiplier:this.medals});
+     for(const map of refinePlan(ranked,rates,screened,35))jobs.set(map.beatmapId,map);
+    }
    }
    if(jobs.size){const refined=await run([...jobs.values()],3,'Refining');
-    const keys=new Set(refined.map(x=>x.beatmapId+'@'+x.rate));
-    results=results.filter(x=>!keys.has(x.beatmapId+'@'+x.rate)).concat(refined);
+    const keys=new Set(refined.map(x=>x.beatmapId+'@'+x.rate+'@'+x.mod));
+    results=results.filter(x=>!keys.has(x.beatmapId+'@'+x.rate+'@'+x.mod)).concat(refined);
    }
    this.results=results;this.scannedAt=Date.now();this.pendingRescan=false;
    await this.replan();
-   this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts, '+results.length+' rate simulations');
+   this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts, '+results.length+' rate/mod simulations');
    if(this.live)await this.publish();
   }catch(e){if(my===this.session)this.fail(e);}
   finally{if(my===this.session){this.scanning=false;this.sweep=null;this.render();}}
@@ -120,11 +122,15 @@ export class SmartFarm {
   const c=this.character;
   if(!c)return;
   const states=Object.fromEntries(FARM_SKILLS.map(k=>[k,{level:Number(c[k])||0,prestige:Number(c[k+'Prestige'])||0}]));
-  this.plan=optimizeFarm({results:this.results,recent:this.recent,states,
+  const options={results:this.results,recent:this.recent,states,
    focus:this.s.focus,backup:this.s.backup,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),
    cutoff:asNumber(this.s.cutoff,1,100,10)/100,physicalShare:asNumber(this.s.physicalShare,0,100,40)/100,
    overheadSec:asNumber(this.s.overheadSec,0,120,8),slots:asNumber(this.s.slots,1,50,10),
-   minEfficiency:asNumber(this.s.minEfficiency,1,100,65)/100,medals:this.medals});
+   minEfficiency:asNumber(this.s.minEfficiency,1,100,65)/100,medals:this.medals};
+  this.modPlans={NM:optimizeFarm({...options,mod:'NM'}),HR:optimizeFarm({...options,mod:'HR'})};
+  const preference=this.s.modPreference;
+  this.plan=preference==='HR'?this.modPlans.HR:preference==='NM'?this.modPlans.NM:
+   this.modPlans.HR.expectedPerMinute>this.modPlans.NM.expectedPerMinute?this.modPlans.HR:this.modPlans.NM;
   this.render();
  }
  async tick(){
@@ -151,7 +157,7 @@ export class SmartFarm {
   await gameDb.batch([{sql:'DELETE FROM playlist_entry WHERE playlistId = ?',params:[id]},
    ...this.plan.rotation.map((x,i)=>({sql:'INSERT INTO playlist_entry (playlistId, beatmapId, rate, position) VALUES (?, ?, ?, ?)',
      params:[id,x.beatmapId,x.rate,i+1]}))]);
-  this.message='Updated managed playlist with '+this.plan.rotation.length+' optimized maps. Reopen Song Select to see it.';
+  this.message='Updated managed playlist with '+this.plan.rotation.length+' maps. The playlist stores per-map rates, NOT mods: choose '+this.plan.mod+' manually in Song Select. Reopen Song Select to see it.';
   this.render();
  }
  socketUrl(){
@@ -182,7 +188,7 @@ export class SmartFarm {
     if(this.live&&msg.state?.label!==LABEL){this.fail(Error('Queue was changed elsewhere. Automatic management paused.'));this.stopLive(false);}
    }
    if(this.starting&&this.socketCharacterId&&this.serverQueue){
-    this.starting=false;this.live=true;this.previousMode=this.serverQueue?.prefs?.mode||null;void this.publish(true);
+    this.starting=false;this.live=true;this.previousMode=this.serverQueue?.prefs?.mode||null;this.previousMods=Array.isArray(this.serverQueue?.prefs?.mods)?[...this.serverQueue.prefs.mods]:null;void this.publish(true);
    }
   };
   ws.onclose=()=>{if(this.socket===ws){this.live=false;this.starting=false;this.socket=null;this.message='Live connection closed; automatic queue updates stopped.';this.render();}};
@@ -196,7 +202,10 @@ export class SmartFarm {
    (this.serverQueue?.label===LABEL||Date.now()-this.lastChange<3000)){
    this.socket.send(JSON.stringify({type:'queue:pause',paused:true}));
    this.socket.send(JSON.stringify({type:'queue:set',source:{label:LABEL},entries:[]}));
-   if(this.previousMode&&this.previousMode!=='PLAYLIST')this.socket.send(JSON.stringify({type:'queue:prefs',prefs:{mode:this.previousMode}}));
+   const restore={};
+   if(this.previousMode)restore.mode=this.previousMode;
+   if(Array.isArray(this.previousMods))restore.mods=this.previousMods;
+   if(Object.keys(restore).length)this.socket.send(JSON.stringify({type:'queue:prefs',prefs:restore}));
   }
   this.owner=false;this.closeSocket();this.render();
  }
@@ -208,19 +217,33 @@ export class SmartFarm {
   if(!first&&Date.now()-this.lastChange<45000)return;
   if(!first&&this.serverQueue?.label!==LABEL){this.stopLive(false);throw Error('Active queue belongs to another source; stopped.');}
   const entries=ready.map(x=>({beatmapId:x.beatmapId,rate:x.rate}));
-  const key=JSON.stringify(entries);
-  if(key===this.appliedKey)return;
+  // Queue entries cannot carry mods individually: only ONE global mod setting can
+  // apply to the entire rotation. Make the mod part of the update identity.
+  const mod=this.plan.mod==='HR'?'HR':'NM';
+  const key=JSON.stringify({entries,mod});
+  const desiredMods=mod==='HR'?['HR']:[];
   if(!first&&this.serverQueue?.paused){this.message='Queue was paused in game; updates suspended.';this.render();return;}
+  if(key===this.appliedKey){
+   // Explicit live consent includes mod management even if a game UI changes mods.
+   if(Array.isArray(this.serverQueue?.prefs?.mods)&&JSON.stringify(this.serverQueue.prefs.mods)!==JSON.stringify(desiredMods)){
+    this.socket.send(JSON.stringify({type:'queue:prefs',prefs:{mods:desiredMods}}));
+    this.message='Reapplied the planned '+mod+' global mod selection.';this.render();
+   }
+   return;
+  }
   this.appliedKey=key;this.lastChange=Date.now();this.owner=true;
   this.socket.send(JSON.stringify({type:'queue:set',source:{label:LABEL,mode:'PLAYLIST'},entries}));
   if(first){
-   // Only explicit Start adjusts gameplay mode; no silent toggle on startup.
-   this.socket.send(JSON.stringify({type:'queue:prefs',prefs:{mode:'PLAYLIST'}}));
+   // Explicit consent authorizes switching global mods for this managed session.
+   this.socket.send(JSON.stringify({type:'queue:prefs',prefs:{mode:'PLAYLIST',mods:desiredMods}}));
+  }else if(JSON.stringify(this.serverQueue?.prefs?.mods)!==JSON.stringify(desiredMods)){
+   // New global mods take effect on NEXT play; we never abort an active map.
+   this.socket.send(JSON.stringify({type:'queue:prefs',prefs:{mods:desiredMods}}));
   }
   // Replacing a queue clears its scheduled start on the official server.
   // Reschedule if idle; a currently active play schedules its own successor.
   if(!this.playActive)this.socket.send(JSON.stringify({type:'queue:start'}));
-  this.message='Synced '+ready.length+' optimized maps to live game queue.';
+  this.message='Synced '+ready.length+' optimized maps; global mods '+mod+' (changes on next map).';
   this.render();
  }
  async action(cmd){
@@ -240,23 +263,25 @@ export class SmartFarm {
   const option=(id,label,current)=>'<option value="'+esc(id)+'"'+(id===current?' selected':'')+'>'+esc(label)+'</option>';
   const field=(key,label,min,max,step)=>'<label>'+label+'<input type="number" min="'+min+'" max="'+max+'" step="'+step+'" data-setting="'+key+'" value="'+esc(this.s[key])+'"></label>';
   const select=(key,label,choices)=>'<label>'+label+'<select data-setting="'+key+'">'+choices.map(k=>option(k,k==='nonphysical'?'All non-physical':k==='stop'?'Stop if fatigued/ready':k==='all'?'All eligible skills':k,this.s[key])).join('')+'</select></label>';
-  const p=this.plan;const html='<p class="intro">Simulate downloaded ranked 4K maps across unlocked rates, account for Mindblock and fatigue, and refresh a managed queue. Simulation uses the <b>oss!idle sim</b> worker code. Full scans are CPU-heavy.</p>'+
+  const p=this.plan;const html='<p class="intro">Simulate downloaded ranked 4K maps at unlocked rates with <b>No Mod and Hard Rock</b> (HR has tighter windows and +10% Accuracy XP). Compare realistic XP per minute after Mindblock and fatigue. Scanning both variants is CPU-heavy.</p>'+
    '<div class="group">'+select('focus','Primary XP skill',FOCUS)+select('backup','Switch to when physical XP ≤ threshold or prestige-ready',FALLBACK)+
+   '<label>Mod strategy<select data-setting="modPreference">'+[['auto','Auto: best whole rotation'],['NM','No Mod only'],['HR','Hard Rock only']].map(([value,label])=>option(value,label,this.s.modPreference)).join('')+'</select></label>'+
    field('cutoff','Physical XP cutoff (%)',1,100,1)+field('fatigueMinutes','Strained fatigue minutes (manual)',0,420,1)+
    field('physicalShare','Physical strain share (%)',0,100,5)+field('slots','Queue length',1,50,1)+
    field('overheadSec','Transition overhead (seconds)',0,120,1)+field('minEfficiency','Minimum relative efficiency (%)',1,100,1)+
    field('scanInterval','Full rescan interval (minutes)',10,120,5)+'</div>'+
    '<div class="actions"><button id="farm-scan"'+(this.scanning?' disabled':'')+'>⚡ Scan downloaded maps</button><button id="farm-cancel"'+(!this.scanning?' disabled':'')+'>Cancel scan</button><button id="farm-save"'+(!p?.rotation?.length?' disabled':'')+'>Save managed playlist</button></div>'+
    '<p class="hint">'+esc(this.progress)+(this.scannedAt?' · Last scan '+new Date(this.scannedAt).toLocaleTimeString():'')+'</p>'+
-   (p?'<div class="summary"><strong>'+nice(p.expectedPerMinute)+' XP/min</strong> <span>Estimated average toward chosen target</span><strong>'+nice(p.fatigueAfter,1)+' min</strong><span>Projected strain after rotation</span></div>'+
+   (p?'<div class="summary"><strong>'+nice(p.expectedPerMinute)+' XP/min</strong><span>Selected '+p.mod+' · duration-weighted XP/min</span><strong>'+nice(p.fatigueAfter,1)+' min</strong><span>Projected strain after rotation</span></div>'+
+     (this.modPlans?'<p class="hint">No Mod: '+nice(this.modPlans.NM.expectedPerMinute)+' XP/min · Hard Rock: '+nice(this.modPlans.HR.expectedPerMinute)+' XP/min. Mod applies to the entire rotation; rates vary per song.</p>':'')+
      (p.reason?'<p class="notice">'+esc(p.reason)+'</p>':'')+
-     '<div class="scroll"><table><thead><tr><th>#</th><th>Beatmap ID</th><th>Rate</th><th>Target</th><th>Est. XP/min</th><th>Fatigue</th></tr></thead><tbody>'+
-     p.rotation.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+x.beatmapId+'</td><td>'+nice(x.rate,2)+'×</td><td>'+esc(x.target)+'</td><td>'+nice(x.xpPerMinute)+'</td><td>'+nice(x.physicalKept*100,1)+'%</td></tr>').join('')+'</tbody></table></div>':'<p class="hint">Scan once to calculate a rotation.</p>')+
-   '<div class="danger"><h3>Live auto queue (explicit opt-in)</h3><p>Replaces the active server queue with the optimized rotation, updates it as scores and fatigue estimates change, and removes maps no longer worth playing. It can change what the game plays next. Only use on your own logged-in character.</p><label class="consent"><input type="checkbox" id="farm-consent"'+(this.consent?' checked':'')+(this.live?' disabled':'')+'> Replace my current game queue and set Autopilot to Playlist</label>'+
+     '<div class="scroll"><table><thead><tr><th>#</th><th>Beatmap ID</th><th>Rate</th><th>Mod</th><th>Target</th><th>Est. XP/min</th><th>Fatigue</th></tr></thead><tbody>'+
+     p.rotation.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+x.beatmapId+'</td><td>'+nice(x.rate,2)+'×</td><td>'+esc(x.mod||p.mod)+'</td><td>'+esc(x.target)+'</td><td>'+nice(x.xpPerMinute)+'</td><td>'+nice(x.physicalKept*100,1)+'%</td></tr>').join('')+'</tbody></table></div>':'<p class="hint">Scan once to calculate a rotation.</p>')+
+   '<div class="danger"><h3>Live auto queue (explicit opt-in)</h3><p>Replaces the active server queue and its global mod selection with the optimized rotation. Can select NM/HR for the whole queue as fatigue changes, but cannot mix mods within a single queue (unlike per-map rates). It never interrupts a currently playing song. Only use on your logged-in character.</p><label class="consent"><input type="checkbox" id="farm-consent"'+(this.consent?' checked':'')+(this.live?' disabled':'')+'> Replace my current game queue, set session-wide mods (NM/HR), and set Autopilot to Playlist</label>'+
    '<div class="actions"><button id="farm-start"'+(!this.consent||!p?.rotation?.length||this.live||this.starting?' disabled':'')+'>▶ Start live optimizer</button><button id="farm-stop"'+(!this.live&&!this.starting?' disabled':'')+'>■ Stop and clear managed queue</button></div>'+
    '<p class="hint">Live updates use a second connection to the official game WebSocket. The game may have limits; this is experimental, and no live test has been performed. The add-on never skips the currently playing chart. Updates stop when disabled.</p></div>'+
    (this.error?'<p class="error">'+esc(this.error)+'</p>':'')+(this.message?'<p class="hint">'+esc(this.message)+'</p>':'')+
-   '<p class="hint">Fatigue input is estimated and simulator hit outcomes are initially simulated from saved skill levels; physical XP loss is adjusted using the game fatigue curve. Actual scores and server fatigue may differ. Reopening Song Select is required after saving a playlist.</p>';
+   '<p class="hint">Fatigue is estimated. Both HR and No Mod are simulated using official timing windows and Accuracy XP modifier; actual server results can differ. The previous global mod setting is restored when you press Stop while still connected. Connection failures may prevent restoration. Actual scores and server fatigue may differ. Reopening Song Select is required after saving a playlist.</p>';
   el.innerHTML=html;
  }
  css(){return `:host{font-family:system-ui;color:#ecedf5}:host *{box-sizing:border-box}.fab{pointer-events:auto;position:fixed;right:18px;bottom:76px;background:#5760b6;color:white;padding:9px 13px;border-radius:24px;cursor:pointer;border:1px solid #888bf0;font-weight:700}#farm-screen{display:none;pointer-events:auto;position:fixed;inset:0;background:#060b18ac;justify-content:center;align-items:center;padding:14px}:host([data-open="true"]) #farm-screen{display:flex}.panel{width:min(890px,98vw);max-height:91vh;overflow:auto;background:#181b2d;border:1px solid #586090;border-radius:14px;box-shadow:0 10px 55px #000b}header{position:sticky;top:0;background:#242941;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;z-index:2}h2,h3{margin:0;font-size:18px}main{padding:14px}button{background:#4d569b;color:#fff;border:1px solid #7782c1;border-radius:7px;padding:9px 12px;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}header button{background:#30374c}.intro,.hint{font-size:12px;color:#c1c7d9}.group{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px}label{font-size:11px;color:#c0c8e9}input,select{display:block;width:100%;padding:7px;background:#12182b;color:#f0effe;border:1px solid #566183;border-radius:6px;margin-top:3px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.summary{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:4px 10px;background:#262f40;padding:10px;border-radius:7px;margin-top:9px}.summary strong{color:#e4e8ff;font-size:19px}.summary span{font-size:11px;color:#9db5ca}.scroll{overflow:auto;max-height:250px;margin:10px 0}table{border-collapse:collapse;width:100%;font-size:11px}th,td{padding:8px;text-align:left;border-bottom:1px solid #374059}th{position:sticky;top:0;background:#2b324a}.danger{border-top:1px solid #636f92;margin-top:15px;padding-top:12px}.danger h3{font-size:14px}.consent{display:flex;align-items:center;gap:7px;font-size:12px}.consent input{width:auto}.notice{font-size:12px;color:#eed9a2}.error{font-size:12px;color:#ff909a}`;}

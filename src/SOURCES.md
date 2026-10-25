@@ -6,3 +6,5 @@
 - Game simulation: https://github.com/oss-idle/oss-idle commit `890882870f319db36e8fa8a72d1cb5a8c553d35e`; version 1.2.3.0, pinned by package-lock.json.
 - Changes in toolkit: worker now accepts a manual fatigue-minute snapshot and simulates physical skills with the game's `tiredSkills` and `warmup` model; pure adaptive optimizer, playlist writer, and opt-in live queue.
 - License: AGPL-3.0-only. See upstream projects for copyright holders. All source is retained in this public repository.
+
+- v0.5.1: worker simulates NM and HR through pinned-game ManiaGame mod-specific timing windows and modXp bonus. The live queue selects one session-wide mod set because queue entries only support rates.
