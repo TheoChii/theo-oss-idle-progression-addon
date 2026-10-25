@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {withTimeout as actualTimeout} from './src/scanGuard.js';
+import {createChartCache,createLimiter} from './src/scanCache.js';
+import {activeModModes,refineBudget,eligibleRefineRows,combineRefinementJobs} from './src/scanStrategy.js';
 const never=()=>new Promise(()=>{});
 assert.equal(await actualTimeout('fast work',500,()=>Promise.resolve(4)),4);
 await assert.rejects(actualTimeout('stalled',20,never),/stalled timed out/);
@@ -28,9 +30,11 @@ const prelude=[
  "const FARM_SKILLS=['speed','accuracy'];const MAX_TIERS=30,MAX_OD=1000000;",
  "const makePolicies=keys=>Object.fromEntries(keys.map(k=>[k,{enabled:false,targets:Array(30).fill(0)}]));",
  "const {gameDb,gameCharacter,recentPlayCounts,medalMultiplier,rankedDifficulties,collectCharts,ratesFor,screenRates,runSweep,rankMaps,refinePlan,optimizeFarm}=globalThis;",
- "const PLAYS_PER_MAP=6;const withTimeout=(label,ms,cb)=>globalThis.__bounded(label,Math.min(ms,35),cb);"
+ "const PLAYS_PER_MAP=6;const withTimeout=(label,ms,cb)=>globalThis.__bounded(label,Math.min(ms,35),cb);"+
+ "const createChartCache=globalThis.__createChartCache,createLimiter=globalThis.__createLimiter,activeModModes=globalThis.__activeModModes,refineBudget=globalThis.__refineBudget,eligibleRefineRows=globalThis.__eligibleRefineRows,combineRefinementJobs=globalThis.__combineRefinementJobs;"
 ].join('\n');
 globalThis.__bounded=actualTimeout;
+Object.assign(globalThis,{__createChartCache:createChartCache,__createLimiter:createLimiter,__activeModModes:activeModModes,__refineBudget:refineBudget,__eligibleRefineRows:eligibleRefineRows,__combineRefinementJobs:combineRefinementJobs});
 const {SmartFarm}=await import('data:text/javascript;base64,'+Buffer.from(prelude+'\n'+source).toString('base64'));
 const fresh=()=>{const f=new SmartFarm();f.root={};return f;};
 flags.medal=true;

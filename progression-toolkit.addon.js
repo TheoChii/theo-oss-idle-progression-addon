@@ -1,4 +1,4 @@
-/* Theo's oss!idle Progression Toolkit v0.5.6 — in-game add-on source.
+/* Theo's oss!idle Progression Toolkit v0.5.7 — in-game add-on source.
    Press Ctrl+Shift+P to toggle the calculator, Esc to close it.
    Calculators read-only. Optional Friend Manager writes only after explicit approval. AGPL-3.0-only. */
 const K='oss-idle-addon:theo-progression-toolkit-v1', A={level:90,upgrades:9,overdrive:15,prestige:1,buyAt:100.25,xpPlay:30000,overall:100.13,totalXpPlay:90000,minutes:4,hours:5,repeats:10,exempt:30000,physical:30000,memory:0,affected:10000,fatigueMinutes:0,restMinutes:0,strainShare:40,betweenMinutes:0.5,staminaUpgrades:0,warmMapMinutes:4,warmPhysicalShare:40,warmGapMinutes:0.5,improveCurrent:100,improveTarget:100.1,improvePrestige:0,improveSkill:'speed',bronze:0,silver:0,gold:0,platinum:0,divine:0};
@@ -821,7 +821,7 @@ root.shadowRoot.addEventListener('input',e=>{
      e.preventDefault();e.stopImmediatePropagation();friendPause('Stopped when toolkit closed.');root.classList.remove('open');
    }
  };
- window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.5.6. Press Ctrl+Shift+P.');
+ window.addEventListener('keydown',hotkeyHandler,true);console.info('[Theo Progression Toolkit] Mounted v0.5.7. Press Ctrl+Shift+P.');
 }
 export function unmount(){
  friendPause('Stopped: add-on unloaded.');

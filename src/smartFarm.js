@@ -5,6 +5,8 @@ import {FARM_SKILLS, optimizeFarm, prestigeReady, fatigueKeep} from './optimizer
 import {optimizePP} from './ppFarm.js';
 import {readBestPP} from './ppHistory.js';
 import {withTimeout} from './scanGuard.js';
+import {createChartCache,createLimiter} from './scanCache.js';
+import {activeModModes,refineBudget,eligibleRefineRows,combineRefinementJobs} from './scanStrategy.js';
 import {applyUpgrade} from '@oss-idle/shared/upgrades';
 import {makePolicies,checkUpgrade,configExport,configImport,MAX_TIERS,MAX_OD} from './autoUpgradeRules.js';
 
@@ -131,14 +133,15 @@ export class SmartFarm {
   shadow.addEventListener('change',e=>{const t=e.target,k=t?.dataset?.setting;
    if(k){
     const previousGoal=this.s.goal;
+    const previousMod=this.s.modPreference;
     this.s[k]=t.type==='checkbox'?t.checked:t.type==='number'?Number(t.value):t.value;
     this.save();
-    if(k==='goal'&&previousGoal!==this.s.goal){
+    if((k==='goal'&&previousGoal!==this.s.goal)||(k==='modPreference'&&previousMod!==this.s.modPreference)){
      if(this.wantLive||this.live||this.starting)this.stopLive(true);
      this.sweep?.cancel();this.session++;this.scanning=false;
      this.results=[];this.plan=null;this.modPlans=null;this.scannedAt=0;
-     this.progress='Switched to '+(this.s.goal==='pp'?'PP':'XP')+' farming; preparing a fresh scan.';
-     this.render();if(this.s.goal==='pp')void this.scan();
+     this.progress='Changed farming strategy; preparing a fresh scan for '+(this.s.goal==='pp'?'PP':'XP')+' and '+this.s.modPreference+'.';
+     this.render();void this.scan();
     }else{this.replan().catch(x=>this.fail(x));this.render();}
     e.stopPropagation();
    }
@@ -220,6 +223,8 @@ export class SmartFarm {
  async scan(){
   if(this.scanning)return;
   this.scanning=true;this.error='';this.scanWarning='';const my=++this.session;
+  const chartCache=createChartCache();
+  const ioLimiter=createLimiter(4);
   this.setProgress('Starting map scan…');
   try{
    await this.loadState();
@@ -235,9 +240,10 @@ export class SmartFarm {
    if(!survey.requests.length)throw Error('No downloaded ranked 4K difficulties found to simulate.');
    const rates=ratesFor(Number(c.speedUpgrades)||0,[]);
    const screened=screenRates(rates);
+   const modModes=activeModModes(this.s.modPreference);
    const run=async(requests,runs,label)=>{
     this.setProgress(label+' · '+requests.length+' maps');
-    const sweep=await withTimeout('Preparing simulation workers',20000,()=>runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),modModes:['NM','HR']},
+    const sweep=await withTimeout('Preparing simulation workers',20000,()=>runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),modModes,chartCache,ioLimiter,folderIndex:survey.folderIndex},
       progress=>{if(my===this.session&&progress.done%5===0)this.setProgress(label+' '+progress.done+'/'+progress.total);}));
     if(my!==this.session){sweep.cancel();throw Error('Scan cancelled.');}
     this.sweep=sweep;const answer=await sweep.finished;
@@ -246,27 +252,37 @@ export class SmartFarm {
    };
    let results=await run(survey.requests.map(x=>({...x,rates:screened})),1,'Screening');
    const skillTargets=this.targetsToRefine();
-   const jobs=new Map();
+   // The first pass samples the whole library once. Spend three-run
+   // refinement only on promising, distinct difficulties for the current
+   // farming goal; PP uses projected improvements over existing personal bests.
+   const budget=refineBudget(this.s.slots);
+   const jobs=[];
    for(const target of skillTargets){
-    for(const mod of ['NM','HR']){
+    for(const mod of modModes){
      const ranked=rankMaps(results.filter(x=>x.mod===mod),{target,overheadSec:this.s.overheadSec,recentPlays:this.recent,medalMultiplier:this.medals});
-     for(const map of refinePlan(ranked,rates,screened,35))jobs.set(map.beatmapId,map);
+     const candidates=eligibleRefineRows(ranked,{goal:this.s.goal,bestPP:this.ppHistory?.best||new Map(),
+      ppRank:this.s.ppRank,overheadSec:this.s.overheadSec,limit:budget});
+     jobs.push(...refinePlan(candidates,rates,screened,budget));
     }
    }
-   if(jobs.size){const refined=await run([...jobs.values()],3,'Refining');
+   const selected=combineRefinementJobs(jobs);
+   if(selected.length){const refined=await run(selected,3,'Refining');
     const keys=new Set(refined.map(x=>x.beatmapId+'@'+x.rate+'@'+x.mod));
     results=results.filter(x=>!keys.has(x.beatmapId+'@'+x.rate+'@'+x.mod)).concat(refined);
    }
    this.results=results;this.scannedAt=Date.now();this.pendingRescan=false;
    await this.replan();
-   this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts, '+results.length+' rate/mod simulations'+(this.s.goal==='pp'?' · PP bests: '+(this.ppHistory?.source||'not loaded'):''));
+   this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts, '+results.length+' rate/mod simulations · '+modModes.join('/')+' · '+chartCache.stats.hits+' cached chart reuses'+(this.s.goal==='pp'?' · PP bests: '+(this.ppHistory?.source||'not loaded'):''));
    if(this.live)await this.publish();
   }catch(e){if(my===this.session){
    const where=this.progress;
    this.progress='Scan failed during '+where+': '+(e?.message||String(e));
    this.fail(e);
   }}
-  finally{if(my===this.session){this.scanning=false;this.sweep=null;this.render();}}
+  finally{
+   chartCache.clear();
+   if(my===this.session){this.scanning=false;this.sweep=null;this.render();}
+  }
  }
  targetsToRefine(){
   if(this.s.goal==='pp')return [{kind:'pp'}];
@@ -538,8 +554,8 @@ export class SmartFarm {
   const p=this.plan;const ppMode=this.s.goal==='pp';
   const summary=p?(ppMode?'<div class="summary"><strong>+'+nice(p.expectedPPGain,2)+' weighted PP</strong><span>Projected gain across '+p.rotation.length+' new best(s)</span><strong>'+nice(p.expectedPPGainPerMinute,2)+' PP/min</strong><span>Estimated improvement rate</span></div>':
    '<div class="summary"><strong>'+nice(p.expectedPerMinute)+' XP/min</strong><span>Selected '+p.mod+' · duration-weighted XP/min</span><strong>'+nice(p.fatigueAfter,1)+' min</strong><span>Projected strain after rotation</span></div>'):'';
-  const comparison=this.modPlans?(ppMode?'<p class="hint">No Mod: +'+nice(this.modPlans.NM.expectedPPGain,2)+' PP ('+nice(this.modPlans.NM.expectedPPGainPerMinute,2)+' PP/min) · HR: +'+nice(this.modPlans.HR.expectedPPGain,2)+' PP ('+nice(this.modPlans.HR.expectedPPGainPerMinute,2)+' PP/min). One global mod selection, separate song rates.</p>':
-    '<p class="hint">No Mod: '+nice(this.modPlans.NM.expectedPerMinute)+' XP/min · Hard Rock: '+nice(this.modPlans.HR.expectedPerMinute)+' XP/min. Mod applies to the entire rotation; rates vary per song.</p>'):'';
+  const comparison=this.modPlans?(ppMode?'<p class="hint">No Mod: '+(this.s.modPreference==='HR'?'not scanned':'+'+nice(this.modPlans.NM.expectedPPGain,2)+' PP ('+nice(this.modPlans.NM.expectedPPGainPerMinute,2)+' PP/min)')+' · HR: '+(this.s.modPreference==='NM'?'not scanned':'+'+nice(this.modPlans.HR.expectedPPGain,2)+' PP ('+nice(this.modPlans.HR.expectedPPGainPerMinute,2)+' PP/min)')+'. One global mod selection, separate song rates.</p>':
+    '<p class="hint">No Mod: '+(this.s.modPreference==='HR'?'not scanned':nice(this.modPlans.NM.expectedPerMinute)+' XP/min')+' · Hard Rock: '+(this.s.modPreference==='NM'?'not scanned':nice(this.modPlans.HR.expectedPerMinute)+' XP/min')+'. Mod applies to the entire rotation; rates vary per song.</p>'):'';
   const html='<p class="intro">'+(ppMode?'PP Farm scans ranked downloaded 4K maps for <b>new personal-best PP</b>. Ranked total is weighted by 0.95 per rank; no repeated XP farming. It compares unlocked rates and NM/HR.':'Simulate downloaded ranked 4K maps at unlocked rates with <b>No Mod and Hard Rock</b> (HR has tighter windows and +10% Accuracy XP). Compare realistic XP per minute after Mindblock and fatigue.')+'</p>'+
    '<label>Farming goal<select data-setting="goal">'+[['xp','Skill XP / Prestige'],['pp','PP / Rank improvement']].map(([v,l])=>option(v,l,this.s.goal)).join('')+'</select></label>'+
    '<div class="group">'+(ppMode?'<label>PP priority<select data-setting="ppRank">'+[['gainPerMinute','Weighted PP gain / minute'],['gain','Highest weighted PP gain']].map(([v,l])=>option(v,l,this.s.ppRank)).join('')+'</select></label>'+field('ppMinGain','Minimum weighted PP improvement per map',0.01,100,0.25):select('focus','Primary XP skill',FOCUS)+select('backup','Switch to when physical XP ≤ threshold or prestige-ready',FALLBACK))+

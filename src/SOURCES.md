@@ -20,3 +20,5 @@
 - v0.5.5: upgraded pinned game sim to v1.2.5.0 and updated Coordination's physical/no-Mindblock handling; guarded retry of live queue with account/ownership verification, session-only consent, and server acknowledgement. No automatic reclaim on game reload.
 
 - v0.5.6: oss!idle v1.2.5.0 desktop migrates downloaded beatmaps to disk folders. Smart Farm reads folder entries via the official exposed `window.ossIdleDesktop.library.list/read('maps',...)` bridge, without modifying the upstream game or opening obsolete desktop IndexedDB. Browser scan still uses the pinned SDK's IndexedDB. Network and local initialization phases are time-limited; medal timeout has a warned 1x fallback.
+
+- v0.5.7: retains official v1.2.5.0 game's simulation and worker protocol. Adds read-only parallel desktop map-file access with one scan-global concurrency cap of four; transient 64 MiB chart text cache; selective NM/HR worker inputs and candidate refinement based on existing XP/PP ranking. Does not change game code or server PP/XP formulas.\n

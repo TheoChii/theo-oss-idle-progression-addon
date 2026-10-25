@@ -12,7 +12,7 @@ assert(worker.includes("modXp(bot.getSkillsXP(chart.totalLength / rate, score) a
 assert(worker.includes("for (const mod of modModes)"));
 assert(client.includes('modModes,'));
 assert(protocol.includes("mod: 'NM' | 'HR'"));
-assert(smart.includes("modModes:['NM','HR']"));
+assert(smart.includes("const modModes=activeModModes(this.s.modPreference)"));
 assert(smart.includes("results.filter(x=>x.mod===mod)"));
 assert(smart.includes("x.beatmapId+'@'+x.rate+'@'+x.mod"));
 assert(smart.includes("const key=JSON.stringify({entries,mod})"));
