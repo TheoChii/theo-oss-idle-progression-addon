@@ -19,7 +19,7 @@ try{
  const mod=await import('data:text/javascript;base64,'+Buffer.from('const FARM_SKILLS=[];\n'+source).toString('base64'));
  const f=new mod.SmartFarm();
  f.root={};f.character={id:12,local:false};f.lastCharacterId=12;
- f.plan={rotation:[{beatmapId:1,rate:1.5},{beatmapId:2,rate:1}]};
+ f.plan={mod:'HR',rotation:[{beatmapId:1,rate:1.5},{beatmapId:2,rate:1}]};
  await assert.rejects(()=>f.startLive(),/Review the queue and check the confirmation/);
  assert.equal(sockets.length,0,'no queue connection without confirmation');
  // When called directly, the UI requires a confirmation first.
@@ -31,23 +31,30 @@ try{
  assert.equal(sent.length,0,'no message before character and queue confirmation');
  ws.onmessage({data:JSON.stringify({type:'character',character:{id:12}})});
  assert.equal(sent.length,0);
- ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Existing game queue',paused:true,prefs:{mode:'DISABLED'}}})});
+ ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Existing game queue',paused:true,prefs:{mode:'DISABLED',mods:['SD']}}})});
  assert(f.live);
  const msg=sent.find(x=>x.type==='queue:set');
  assert.equal(msg.source.label,'Theo Smart Farm (managed)');
  assert.deepEqual(msg.entries,[{beatmapId:1,rate:1.5},{beatmapId:2,rate:1}]);
- assert(sent.some(x=>x.type==='queue:prefs'&&x.prefs.mode==='PLAYLIST'));
+ assert(sent.some(x=>x.type==='queue:prefs'&&x.prefs.mode==='PLAYLIST'&&JSON.stringify(x.prefs.mods)===JSON.stringify(['HR'])),'first start applies HR globally');
  assert(sent.some(x=>x.type==='queue:start'));
  // New rankings must replace, not append, the managed queue.
- ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Theo Smart Farm (managed)',paused:false,prefs:{mode:'PLAYLIST'}}})});
- f.lastChange=0;f.plan={rotation:[{beatmapId:3,rate:2}]};
+ ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Theo Smart Farm (managed)',paused:false,prefs:{mode:'PLAYLIST',mods:['HR']}}})});
+ f.lastChange=0;f.plan={mod:'NM',rotation:[{beatmapId:3,rate:2}]};
  await f.publish();
  assert.deepEqual(sent.filter(x=>x.type==='queue:set').at(-1).entries,[{beatmapId:3,rate:2}]);
  assert(sent.filter(x=>x.type==='queue:start').length>=2,'idle re-queue is rescheduled');
+ assert(sent.some(x=>x.type==='queue:prefs'&&JSON.stringify(x.prefs.mods)===JSON.stringify([])),'new rotation switches to No Mod globally');
+ ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Theo Smart Farm (managed)',paused:false,prefs:{mode:'PLAYLIST',mods:[]}}})});
+ const beforeRepeat=sent.length;f.lastChange=0;await f.publish();assert.equal(sent.length,beforeRepeat,'same song and mod queue does not resend');
+ // If the game changes mods while the optimizer is explicitly active, restore its selected global mode.
+ ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Theo Smart Farm (managed)',paused:false,prefs:{mode:'PLAYLIST',mods:['SD']}}})});
+ f.lastChange=0;await f.publish();
+ assert.deepEqual(sent.at(-1),{type:'queue:prefs',prefs:{mods:[]}},'restore global mods when a game setting drifts');
  f.stopLive(true);
  assert(sent.some(x=>x.type==='queue:pause'&&x.paused));
  assert.deepEqual(sent.filter(x=>x.type==='queue:set').at(-1).entries,[]);
- assert(sent.some(x=>x.type==='queue:prefs'&&x.prefs.mode==='DISABLED'),'restore previous autopilot mode');
+ assert(sent.some(x=>x.type==='queue:prefs'&&x.prefs.mode==='DISABLED'&&JSON.stringify(x.prefs.mods)===JSON.stringify(['SD'])),'restore prior autopilot mode and global mods');
  assert.equal(f.live,false);
  const mismatch=new mod.SmartFarm();mismatch.root={};mismatch.character={id:14,local:false};mismatch.plan={rotation:[{beatmapId:1,rate:1}]};mismatch.consent=true;
  await mismatch.startLive();
@@ -55,5 +62,5 @@ try{
  other.onmessage({data:JSON.stringify({type:'character',character:{id:15}})});
  assert(!mismatch.live,'wrong character must disable queue');
  assert(!sent.some(x=>x.source?.label==='Theo Smart Farm (managed)'&&x.entries?.some(y=>y.beatmapId===14)));
- console.log('PASS: explicit consent, selected-character check, live queue replacement, idle restart, opt-in pause/clear, autopilot restore');
+ console.log('PASS: explicit consent, identity, HR/NM global mod writes, queue switching, cooldown, stop and original mod restore');
 }finally{globalThis.setTimeout=oldSetTimeout;}

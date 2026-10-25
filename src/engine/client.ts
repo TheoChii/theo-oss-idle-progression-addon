@@ -162,12 +162,13 @@ type Job = { setId: number; maps: SimRequest[] };
 /** Simulate the current character against `requests`, a set at a time per worker. */
 export const runSweep = async (
 	requests: SimRequest[],
-	{ runs = 3, characterId, memoryAhead = 0, fatigueMinutes = 0 }: {
+	{ runs = 3, characterId, memoryAhead = 0, fatigueMinutes = 0, modModes = ['NM'] as ('NM' | 'HR')[] }: {
 		runs?: number;
 		characterId?: number;
 		/** Plays added to each map's count before seeding memory - see `PLAYS_PER_MAP`. */
 		memoryAhead?: number;
 		fatigueMinutes?: number;
+		modModes?: ('NM' | 'HR')[];
 	} = {},
 	onProgress?: (progress: SweepProgress) => void,
 ): Promise<Sweep> => {
@@ -258,6 +259,7 @@ export const runSweep = async (
 			divine,
 			runs,
 			fatigueMinutes,
+			modModes,
 			maps: job.maps.map(({ beatmapId, rates }) => ({
 				beatmapId, rates, timesPlayed: (playCounts[beatmapId] ?? 0) + memoryAhead,
 			})),

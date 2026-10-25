@@ -36,6 +36,8 @@ export type SimResult = {
 	beatmapId: number;
 	/** Playback rate the play ran at. */
 	rate: number;
+	/** Evaluated gameplay mods. NM = No Mod, HR = Hard Rock. */
+	mod: 'NM' | 'HR';
 	/** Star rating at that rate (0 if rosu-pp is unavailable). */
 	stars: number;
 	/** Mean per-skill XP per play, before mindblock. */
@@ -80,6 +82,8 @@ export type WorkerRequest = {
 	/** Attempts to average per map and rate. Higher is steadier but linearly slower. */
 	runs: number;	/** Accumulated strained minutes when simulated. */
 	fatigueMinutes?: number;
+	/** Mod variants to simulate at each rate. */
+	modModes?: ('NM' | 'HR')[];
 	maps: {
 		beatmapId: number;
 		/** Playback rates to simulate it at. */
