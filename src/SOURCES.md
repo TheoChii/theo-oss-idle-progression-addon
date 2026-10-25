@@ -18,3 +18,5 @@
 - v0.5.4: optional auto-upgrade planning uses the pinned game's `canUpgrade`/`applyUpgrade` implementation, official signed-in `GET /v1/me/character` and `POST /v1/me/upgrade`, and follows the server's deferred mid-play purchase behavior. Targets are the predicted raw OD total *after* buying each numbered gear tier. Explicit arming is never persisted.
 
 - v0.5.5: upgraded pinned game sim to v1.2.5.0 and updated Coordination's physical/no-Mindblock handling; guarded retry of live queue with account/ownership verification, session-only consent, and server acknowledgement. No automatic reclaim on game reload.
+
+- v0.5.6: oss!idle v1.2.5.0 desktop migrates downloaded beatmaps to disk folders. Smart Farm reads folder entries via the official exposed `window.ossIdleDesktop.library.list/read('maps',...)` bridge, without modifying the upstream game or opening obsolete desktop IndexedDB. Browser scan still uses the pinned SDK's IndexedDB. Network and local initialization phases are time-limited; medal timeout has a warned 1x fallback.

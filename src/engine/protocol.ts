@@ -75,6 +75,9 @@ export type SimError = {
 export type WorkerRequest = {
 	type: 'job';
 	setId: number;
+	/** Only for 1.2.5+ desktop map folders: text of the current mapset's charts.
+	 * Browser workers continue to use the SDK beatmap IndexedDB. */
+	charts?: Record<number,string>;
 	/** The `character` row, used to rebuild the player's skills worker-side. */
 	character: Record<string, unknown>;
 	/** Whether the character has the DIVINE unlock (changes judgement). */

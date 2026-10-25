@@ -4,6 +4,7 @@ import {rankMaps, screenRates, refinePlan, PLAYS_PER_MAP} from './farm/metrics.j
 import {FARM_SKILLS, optimizeFarm, prestigeReady, fatigueKeep} from './optimizer.js';
 import {optimizePP} from './ppFarm.js';
 import {readBestPP} from './ppHistory.js';
+import {withTimeout} from './scanGuard.js';
 import {applyUpgrade} from '@oss-idle/shared/upgrades';
 import {makePolicies,checkUpgrade,configExport,configImport,MAX_TIERS,MAX_OD} from './autoUpgradeRules.js';
 
@@ -24,7 +25,7 @@ export class SmartFarm {
   this.s={...defaults};try{const old=JSON.parse(localStorage.getItem(SETTINGS)||'{}');for(const k of Object.keys(defaults)){if(Object.hasOwn(old,k)&&k!=='liveQueue'&&k!=='autoPlaylist')this.s[k]=old[k];}}catch{}
   this.scanning=false;this.live=false;this.sweep=null;this.results=[];this.recent=new Map();this.medals=1;this.ppHistory=null;this.lastPpFetch=0;
   this.character=null;this.plan=null;this.modPlans=null;this.root=null;this.shadow=null;this.visible=false;this.error='';this.message='';
-  this.progress='Not scanned';this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
+  this.progress='Not scanned';this.scanWarning='';this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
   this.socket=null;this.serverQueue=null;this.socketCharacterId=null;this.playActive=false;this.lastChange=0;this.previousMode=null;this.previousMods=null;
   this.tickInterval=null;this.keyHandler=null;this.consent=false;this.session=0;this.starting=false;
   // Explicit consent is session-only. Retry temporary WebSocket failures, but
@@ -183,43 +184,62 @@ export class SmartFarm {
  fail(err){this.error=err?.message||String(err);this.render();}
  setProgress(v){this.progress=v;this.render();}
  async loadState(){
-  await gameDb.ready();
-  const c=await gameCharacter.live();
+  const status=text=>{if(this.scanning)this.setProgress(text);};
+  status('Opening game character database…');
+  await withTimeout('Game database',15000,()=>gameDb.ready(12000));
+  status('Reading selected character…');
+  const c=await withTimeout('Selected character lookup',12000,()=>gameCharacter.live());
   if(!c)throw Error('No saved character detected. Play a map once, then try again.');
   const signature=FARM_SKILLS.map(k=>[Number(c[k+'Upgrades'])||0,Number(c[k+'Prestige'])||0]);
   const fingerprint=JSON.stringify(signature);
   if(c.id!==this.lastCharacterId){
    if(this.autoUpgrades)this.disarmUpgrades('Character switched; auto-upgrades stopped.');
-   if(this.live){this.stopLive(false);this.message='Character changed; live queue updates suspended until you start again.';}this.results=[];this.plan=null;this.modPlans=null;this.lastCharacterId=c.id;this.appliedKey='';this.ppHistory=null;this.lastPpFetch=0;}
-  else if(this.profileFingerprint!==null&&this.profileFingerprint!==fingerprint){this.pendingRescan=true;}
-  this.profileFingerprint=fingerprint;
-  this.character=c;
-  const [recent,medals]=await Promise.all([recentPlayCounts(Number(c.id)),medalMultiplier(c)]);
+   if(this.live){this.stopLive(false);this.message='Character changed; live queue updates suspended until you start again.';}
+   this.results=[];this.plan=null;this.modPlans=null;this.lastCharacterId=c.id;
+   this.appliedKey='';this.ppHistory=null;this.lastPpFetch=0;
+  }else if(this.profileFingerprint!==null&&this.profileFingerprint!==fingerprint)this.pendingRescan=true;
+  this.profileFingerprint=fingerprint;this.character=c;
+  status('Checking recent plays and medal bonuses…');
+  // The medal API may stall, especially after an oss!idle update. A temporary
+  // medal failure must never block the entire downloaded-map scan.
+  const [recent,medals]=await Promise.all([
+   withTimeout('Recent-play history',12000,()=>recentPlayCounts(Number(c.id))),
+   withTimeout('Medal bonuses',10000,signal=>medalMultiplier(c,signal)).catch(()=>undefined),
+  ]);
   this.recent=recent;this.medals=medals??1;
+  if(medals===undefined&&this.scanning)
+   this.scanWarning='Medal bonuses unavailable; XP estimates temporarily omit medal multipliers.';
   if(this.s.goal==='pp'){
+   status('Reading your PP personal-best history…');
    const updateServer=!c.local&&(!this.ppHistory||Date.now()-this.lastPpFetch>5*60000);
-   const read=await readBestPP(c.id,{server:updateServer});
+   const read=await withTimeout('PP best-score history',18000,()=>readBestPP(c.id,{server:updateServer}));
    if(!this.ppHistory||updateServer){this.ppHistory=read;this.lastPpFetch=Date.now();}
    else for(const [id,pp] of read.best)this.ppHistory.best.set(id,Math.max(pp,this.ppHistory.best.get(id)||0));
   }
  }
  async scan(){
   if(this.scanning)return;
-  this.scanning=true;this.error='';const my=++this.session;
-  this.setProgress('Reading character and downloaded maps…');
+  this.scanning=true;this.error='';this.scanWarning='';const my=++this.session;
+  this.setProgress('Starting map scan…');
   try{
    await this.loadState();
+   if(my!==this.session)throw Error('Scan cancelled.');
    const c=this.character;
-   const ranked=c.local?undefined:await rankedDifficulties();
-   if(!c.local&&!ranked)throw Error('Ranked catalog unavailable; cannot safely select XP-paying maps.');
-   const survey=await collectCharts(ranked);
+   this.setProgress(c.local?'Offline character: checking downloaded maps…':'Fetching ranked map catalog…');
+   const ranked=c.local?undefined:await withTimeout('Ranked map catalog',15000,signal=>rankedDifficulties(signal));
+   if(my!==this.session)throw Error('Scan cancelled.');
+   if(!c.local&&!ranked)throw Error('Ranked map catalog unavailable. Check your game connection and retry; only ranked maps count for online XP.');
+   this.setProgress('Reading downloaded map metadata…');
+   const survey=await withTimeout('Downloaded map library',15000,()=>collectCharts(ranked));
+   if(my!==this.session)throw Error('Scan cancelled.');
    if(!survey.requests.length)throw Error('No downloaded ranked 4K difficulties found to simulate.');
    const rates=ratesFor(Number(c.speedUpgrades)||0,[]);
    const screened=screenRates(rates);
    const run=async(requests,runs,label)=>{
     this.setProgress(label+' · '+requests.length+' maps');
-    const sweep=await runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),modModes:['NM','HR']},
-      progress=>{if(my===this.session&&progress.done%5===0)this.setProgress(label+' '+progress.done+'/'+progress.total);});
+    const sweep=await withTimeout('Preparing simulation workers',20000,()=>runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),modModes:['NM','HR']},
+      progress=>{if(my===this.session&&progress.done%5===0)this.setProgress(label+' '+progress.done+'/'+progress.total);}));
+    if(my!==this.session){sweep.cancel();throw Error('Scan cancelled.');}
     this.sweep=sweep;const answer=await sweep.finished;
     if(answer.cancelled||my!==this.session)throw Error('Scan cancelled.');
     return answer.results;
@@ -241,7 +261,11 @@ export class SmartFarm {
    await this.replan();
    this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts, '+results.length+' rate/mod simulations'+(this.s.goal==='pp'?' · PP bests: '+(this.ppHistory?.source||'not loaded'):''));
    if(this.live)await this.publish();
-  }catch(e){if(my===this.session)this.fail(e);}
+  }catch(e){if(my===this.session){
+   const where=this.progress;
+   this.progress='Scan failed during '+where+': '+(e?.message||String(e));
+   this.fail(e);
+  }}
   finally{if(my===this.session){this.scanning=false;this.sweep=null;this.render();}}
  }
  targetsToRefine(){
@@ -525,6 +549,7 @@ export class SmartFarm {
    field('scanInterval','Full rescan interval (minutes)',10,120,5)+'</div>'+
    '<div class="actions"><button id="farm-scan"'+(this.scanning?' disabled':'')+'>⚡ Scan downloaded maps</button><button id="farm-cancel"'+(!this.scanning?' disabled':'')+'>Cancel scan</button><button id="farm-save"'+(!p?.rotation?.length?' disabled':'')+'>Save managed playlist</button></div>'+
    '<p class="hint">'+esc(this.progress)+(this.scannedAt?' · Last scan '+new Date(this.scannedAt).toLocaleTimeString():'')+'</p>'+
+   (this.scanWarning?'<p class="notice">'+esc(this.scanWarning)+'</p>':'')+
    (p?summary+comparison+(ppMode?'<p class="hint">Existing PP source: '+esc(this.ppHistory?.source||'not available')+'. Projections are probabilistic and actual weighted PP depends on your server PBs; rescan after upgrades.</p>':'')+
      (p.reason?'<p class="notice">'+esc(p.reason)+'</p>':'')+
      '<div class="scroll"><table><thead><tr><th>#</th><th>Beatmap ID</th><th>Rate</th><th>Mod</th>'+(ppMode?'<th>Simulated PP</th><th>Previous best</th><th>Weighted gain</th>':'<th>Target</th><th>Est. XP/min</th><th>Fatigue</th>')+'</tr></thead><tbody>'+
