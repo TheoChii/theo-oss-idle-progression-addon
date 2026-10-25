@@ -27,6 +27,10 @@ export class SmartFarm {
   this.progress='Not scanned';this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
   this.socket=null;this.serverQueue=null;this.socketCharacterId=null;this.playActive=false;this.lastChange=0;this.previousMode=null;this.previousMods=null;
   this.tickInterval=null;this.keyHandler=null;this.consent=false;this.session=0;this.starting=false;
+  // Explicit consent is session-only. Retry temporary WebSocket failures, but
+  // never auto-reclaim a queue that another controller has taken over.
+  this.wantLive=false;this.reconnecting=false;this.retries=0;this.reconnectTimer=null;
+  this.ackTimer=null;this.awaitingAck=false;this.managedAck=false;
   this.pendingRescan=false;this.writing=false;this.profileFingerprint=null;
   // Policies persist locally; authenticated purchasing never arms on launch.
   let stored={};try{stored=JSON.parse(localStorage.getItem(UPGRADE_SETTINGS)||'{}');}catch{}
@@ -129,7 +133,7 @@ export class SmartFarm {
     this.s[k]=t.type==='checkbox'?t.checked:t.type==='number'?Number(t.value):t.value;
     this.save();
     if(k==='goal'&&previousGoal!==this.s.goal){
-     if(this.live)this.stopLive(true);
+     if(this.wantLive||this.live||this.starting)this.stopLive(true);
      this.sweep?.cancel();this.session++;this.scanning=false;
      this.results=[];this.plan=null;this.modPlans=null;this.scannedAt=0;
      this.progress='Switched to '+(this.s.goal==='pp'?'PP':'XP')+' farming; preparing a fresh scan.';
@@ -171,7 +175,7 @@ export class SmartFarm {
  unmount(){
   this.session++;this.scanning=false;this.sweep?.cancel();this.sweep=null;
   this.disarmUpgrades('Add-on unloaded; auto-upgrades disarmed.');
-  if(this.live)this.stopLive(true);
+  if(this.wantLive||this.live||this.reconnecting||this.starting)this.stopLive(true);
   if(this.tickInterval)clearInterval(this.tickInterval);
   if(this.keyHandler)window.removeEventListener('keydown',this.keyHandler,true);
   this.closeSocket();this.live=false;this.root?.remove();this.root=null;this.shadow=null;
@@ -306,38 +310,118 @@ export class SmartFarm {
   return url.toString();
  }
  async startLive(){
-  if(this.live||this.starting)return;
+  if(this.wantLive||this.live||this.starting)return;
   if(!this.consent)throw Error('Review the queue and check the confirmation first.');
   if(!this.plan?.rotation?.length)throw Error('Scan maps before starting the live queue.');
   if(this.character?.local)throw Error('Live server queue requires an online character.');
-  this.starting=true;this.message='Connecting to official game queue…';this.render();
+  this.wantLive=true;this.retries=0;this.managedAck=false;this.awaitingAck=false;
+  this.message='Connecting to official game queue…';this.render();
+  try{this.connectLive(false);}
+  catch(e){this.stopLive(false);throw e;}
+ }
+ connectLive(resume=false){
+  if(!this.wantLive||!this.root)return;
+  this.starting=true;this.reconnecting=resume;
   const ws=new WebSocket(this.socketUrl());
   this.socket=ws;this.socketCharacterId=null;this.serverQueue=null;
   ws.onmessage=e=>{
-   if(!this.root||this.socket!==ws)return;
+   if(!this.root||this.socket!==ws||!this.wantLive)return;
    let msg;try{msg=JSON.parse(e.data);}catch{return;}
    if(msg.type==='character'){
     this.socketCharacterId=Number(msg.character?.id);
-    if(this.socketCharacterId!==Number(this.character?.id)){this.fail(Error('Live character differs from selected character; queue disabled.'));this.stopLive(false);return;}
+    if(this.socketCharacterId!==Number(this.character?.id)){
+     this.stopLive(false);
+     this.fail(Error('Live character differs from selected character; optimizer stopped.'));
+     return;
+    }
    }
    if(msg.type==='play:state')this.playActive=msg.state?.phase==='active';
    if(msg.type==='queue:state'){
     this.serverQueue=msg.state;
-    if(this.live&&msg.state?.label!==LABEL){this.fail(Error('Queue was changed elsewhere. Automatic management paused.'));this.stopLive(false);}
+    if(this.awaitingAck&&msg.state?.label===LABEL){
+     this.awaitingAck=false;this.managedAck=true;
+     if(this.ackTimer!==null)clearTimeout(this.ackTimer);
+     this.ackTimer=null;this.message='Managed queue confirmed by the game server.';this.render();
+    }else if(this.live&&!this.starting&&this.managedAck&&!this.awaitingAck&&msg.state?.label!==LABEL){
+     this.stopLive(false);
+     this.fail(Error('Queue changed elsewhere. Optimizer stopped to protect your queue.'));
+     return;
+    }
    }
    if(this.starting&&this.socketCharacterId&&this.serverQueue){
-    this.starting=false;this.live=true;this.previousMode=this.serverQueue?.prefs?.mode||null;this.previousMods=Array.isArray(this.serverQueue?.prefs?.mods)?[...this.serverQueue.prefs.mods]:null;void this.publish(true);
+    if(resume&&(this.serverQueue.label!==LABEL||!this.managedAck)){
+     this.stopLive(false);
+     this.fail(Error('Reconnect found a different queue; optimizer stopped without overwriting it.'));
+     return;
+    }
+    this.starting=false;this.reconnecting=false;this.live=true;this.retries=0;
+    if(resume){
+     this.message='Live optimizer reconnected to its managed queue.';
+     this.render();
+     // Do not replace/automatically restart the queue on reconnect. Publish
+     // only normal changes after the original session and queue are confirmed.
+     void this.publish().catch(err=>this.fail(err));
+    }else{
+     this.previousMode=this.serverQueue?.prefs?.mode||null;
+     this.previousMods=Array.isArray(this.serverQueue?.prefs?.mods)?[...this.serverQueue.prefs.mods]:null;
+     void this.publish(true).catch(err=>{this.stopLive(false);this.fail(err);});
+    }
    }
   };
-  ws.onclose=()=>{if(this.socket===ws){this.live=false;this.starting=false;this.socket=null;this.message='Live connection closed; automatic queue updates stopped.';this.render();}};
-  ws.onerror=()=>{this.fail(Error('Could not connect to oss!idle live queue.'));ws.close();};
-  setTimeout(()=>{if(this.starting&&this.socket===ws){this.fail(Error('No game queue state after 12 seconds.'));this.stopLive(false);}},12000);
+  ws.onerror=()=>{
+   if(this.socket!==ws)return;
+   this.message='Connection problem; checking if the live session can be resumed.';
+   this.render();ws.close();
+  };
+  ws.onclose=e=>{
+   if(this.socket!==ws)return;
+   this.socket=null;this.socketCharacterId=null;this.serverQueue=null;this.starting=false;
+   if(this.ackTimer!==null)clearTimeout(this.ackTimer);
+   this.ackTimer=null;this.awaitingAck=false;
+   if(!this.wantLive||!this.root)return;
+   if(this.owner&&!this.managedAck){
+    this.stopLive(false);
+    this.fail(Error('Connection lost before the game confirmed queue ownership. Restart manually.'));
+    return;
+   }
+   this.scheduleReconnect(e?.code);
+  };
+  setTimeout(()=>{
+   if(this.starting&&this.socket===ws&&this.wantLive){
+    this.message='Queue connection timed out; trying to reconnect.';ws.close();
+   }
+  },12000);
+ }
+ scheduleReconnect(code){
+  if(!this.wantLive||!this.root)return;
+  const delays=[2000,4000,8000,16000,30000];
+  if(this.retries>=delays.length){
+   this.stopLive(false);
+   this.fail(Error('Live connection failed after 5 retries; restart manually. Queue was not overwritten.'));
+   return;
+  }
+  const wait=delays[this.retries++];
+  this.reconnecting=true;this.live=true;
+  this.message='Connection lost'+(Number.isFinite(code)?' (code '+code+')':'')+
+   '. Reconnecting in '+Math.round(wait/1000)+'s (attempt '+this.retries+'/5)…';
+  this.render();
+  this.reconnectTimer=setTimeout(()=>{
+   this.reconnectTimer=null;
+   if(!this.wantLive||!this.root)return;
+   try{this.connectLive(this.managedAck);}
+   catch(e){this.message='Reconnect error: '+(e?.message||String(e));this.scheduleReconnect();}
+  },wait);
  }
  closeSocket(){if(this.socket){const s=this.socket;this.socket=null;s.close();}}
  stopLive(clear=true){
-  this.live=false;this.starting=false;this.consent=false;
-  if(clear&&this.socket?.readyState===WebSocket.OPEN&&this.owner&&this.appliedKey&&
-   (this.serverQueue?.label===LABEL||Date.now()-this.lastChange<3000)){
+  this.wantLive=false;this.live=false;this.starting=false;this.reconnecting=false;this.consent=false;
+  if(this.reconnectTimer!==null)clearTimeout(this.reconnectTimer);
+  this.reconnectTimer=null;
+  if(this.ackTimer!==null)clearTimeout(this.ackTimer);
+  this.ackTimer=null;this.awaitingAck=false;
+  const canClear=Boolean(clear&&this.socket?.readyState===WebSocket.OPEN&&this.owner&&this.managedAck&&
+   this.serverQueue?.label===LABEL);
+  if(canClear){
    this.socket.send(JSON.stringify({type:'queue:pause',paused:true}));
    this.socket.send(JSON.stringify({type:'queue:set',source:{label:LABEL},entries:[]}));
    const restore={};
@@ -345,7 +429,8 @@ export class SmartFarm {
    if(Array.isArray(this.previousMods))restore.mods=this.previousMods;
    if(Object.keys(restore).length)this.socket.send(JSON.stringify({type:'queue:prefs',prefs:restore}));
   }
-  this.owner=false;this.closeSocket();this.render();
+  this.owner=false;this.managedAck=false;this.closeSocket();this.render();
+  return canClear;
  }
  async publish(first=false){
   if(!this.live||!this.socket||this.socket.readyState!==WebSocket.OPEN||!this.plan)return;
@@ -353,7 +438,9 @@ export class SmartFarm {
   // On a prestige threshold, end only the queue owned by this tool.
   if(!ready.length){this.message=this.s.goal==='pp'?'No simulated improvement remains in downloaded ranked maps; PP queue stopped.':'Selected targets are prestige-ready; managed queue stopped.';this.stopLive();return;}
   if(!first&&Date.now()-this.lastChange<45000)return;
-  if(!first&&this.serverQueue?.label!==LABEL){this.stopLive(false);throw Error('Active queue belongs to another source; stopped.');}
+  if(!first&&this.serverQueue?.label!==LABEL){
+   this.stopLive(false);throw Error('Active queue belongs to another source; stopped.');
+  }
   const entries=ready.map(x=>({beatmapId:x.beatmapId,rate:x.rate}));
   // Queue entries cannot carry mods individually: only ONE global mod setting can
   // apply to the entire rotation. Make the mod part of the update identity.
@@ -370,6 +457,16 @@ export class SmartFarm {
    return;
   }
   this.appliedKey=key;this.lastChange=Date.now();this.owner=true;
+  if(first){
+   this.awaitingAck=true;
+   const current=this.socket;
+   this.ackTimer=setTimeout(()=>{
+    if(this.wantLive&&this.socket===current&&this.awaitingAck){
+     this.stopLive(false);
+     this.fail(Error('No confirmation for managed queue within 12 seconds; stopped safely.'));
+    }
+   },12000);
+  }
   this.socket.send(JSON.stringify({type:'queue:set',source:{label:LABEL,mode:'PLAYLIST'},entries}));
   if(first){
    // Explicit consent authorizes switching global mods for this managed session.
@@ -391,7 +488,7 @@ export class SmartFarm {
    if(cmd==='farm-cancel'){this.session++;this.sweep?.cancel();this.scanning=false;this.setProgress('Scan cancelled');return;}
    if(cmd==='farm-save'){await this.savePlaylist();return;}
    if(cmd==='farm-start'){await this.startLive();return;}
-   if(cmd==='farm-stop'){this.stopLive(true);this.message='Stopped auto queue. Only the managed queue was cleared.';this.render();return;}
+   if(cmd==='farm-stop'){const cleared=this.stopLive(true);this.message=cleared?'Stopped optimizer and cleared its managed server queue.':'Stopped local optimizer. Server queue was NOT cleared (connection/ownership unavailable); check the game queue manually.';this.render();return;}
    if(cmd==='upgrades-arm'){await this.armUpgrades();return;}
    if(cmd==='upgrades-disarm'){this.disarmUpgrades('Stopped by you. A purchase already queued by the server may still complete.');this.render();return;}
    if(cmd==='farm-settings-save'){this.save();this.saveUpgradePolicies();this.message='Settings saved locally on this device. Auto-upgrade purchasing is not enabled by saving.';this.render();return;}
@@ -399,7 +496,7 @@ export class SmartFarm {
    if(cmd==='farm-settings-import'){
     const next=configImport(this.importText,defaults,FARM_SKILLS);
     this.disarmUpgrades('Imported settings. Auto-purchasing remains OFF until you explicitly arm it.');
-    if(this.live)this.stopLive(true);
+    if(this.wantLive||this.live||this.starting)this.stopLive(true);
     this.s=next.settings;this.upgradePolicies=next.upgrades;
     this.save();this.saveUpgradePolicies();
     this.exportText='';this.importText='';this.results=[];this.plan=null;this.modPlans=null;this.scannedAt=0;
@@ -434,8 +531,8 @@ export class SmartFarm {
      p.rotation.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+x.beatmapId+'</td><td>'+nice(x.rate,2)+'×</td><td>'+esc(x.mod||p.mod)+'</td>'+(ppMode?'<td>'+nice(x.expectedPP,2)+'</td><td>'+nice(x.previousPP,2)+'</td><td>+'+nice(x.ppGain,2)+'</td>':'<td>'+esc(x.target)+'</td><td>'+nice(x.xpPerMinute)+'</td><td>'+nice(x.physicalKept*100,1)+'%</td>')+'</tr>').join('')+'</tbody></table></div>':'<p class="hint">Scan once to calculate a rotation.</p>')+
    this.renderUpgradeSettings()+
    '<div class="danger"><h3>Live auto queue (explicit opt-in)</h3><p>Replaces the active server queue and its global mod selection with the optimized rotation. Can select NM/HR for the whole queue as fatigue changes, but cannot mix mods within a single queue (unlike per-map rates). It never interrupts a currently playing song. Only use on your logged-in character.</p><label class="consent"><input type="checkbox" id="farm-consent"'+(this.consent?' checked':'')+(this.live?' disabled':'')+'> Replace my current game queue, set session-wide mods (NM/HR), and set Autopilot to Playlist</label>'+
-   '<div class="actions"><button id="farm-start"'+(!this.consent||!p?.rotation?.length||this.live||this.starting?' disabled':'')+'>▶ Start live optimizer</button><button id="farm-stop"'+(!this.live&&!this.starting?' disabled':'')+'>■ Stop and clear managed queue</button></div>'+
-   '<p class="hint">Live updates use a second connection to the official game WebSocket. The game may have limits; this is experimental, and no live test has been performed. The add-on never skips the currently playing chart. Updates stop when disabled.</p></div>'+
+   '<div class="actions"><button id="farm-start"'+(!this.consent||!p?.rotation?.length||this.wantLive||this.live||this.starting?' disabled':'')+'>▶ Start live optimizer</button><button id="farm-stop"'+(!this.wantLive&&!this.live&&!this.starting&&!this.reconnecting?' disabled':'')+'>■ Stop and clear managed queue</button></div>'+
+   '<p class="hint">Live updates use the official game WebSocket. Short connection drops retry up to five times while this add-on remains loaded, but never reclaim a queue changed elsewhere. Reloads still require your approval. Status: '+(this.reconnecting?'Reconnecting':this.live?'Connected':'Not connected')+'. Experimental; no live account test yet.</p></div>'+
    (this.error?'<p class="error">'+esc(this.error)+'</p>':'')+(this.message?'<p class="hint">'+esc(this.message)+'</p>':'')+
    '<p class="hint">PP mode uses your best ranked plays, not accumulated XP. Actual performance, failed plays, and server-side best scores may differ from simulation. No mod is saved with a local playlist. Previous global mods are restored on Stop only while connected.</p>';
   el.innerHTML=html;

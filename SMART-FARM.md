@@ -1,10 +1,10 @@
-## Smart Farm / Auto Queue (experimental, v0.5.4)
+## Smart Farm / Auto Queue (experimental, v0.5.5)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
 ### How the optimization works
 
-This add-on bundles the scanning and worker-based simulation code adapted from [oss!idle sim](https://github.com/oss-idle/addon-sim), pinned to oss!idle **1.2.3.0**. It scans **downloaded ranked 4K maps**, screens unlocked rates, and refines promising difficulties by averaging three simulations per map/rate/mod variant. In v0.5.1, it evaluates both **No Mod (NM)** and **Hard Rock (HR)**, using the game's tighter HR hit windows and **1.10x Accuracy XP multiplier**. HR is not inherently optimal: it may reduce hit quality or cause failures. Comparing both modes increases scan time. The simulated bot has the saved character's skills, with its physical performance adjusted for the entered fatigue and warm-up. Medals, failure rates, run durations, and play-rate unlocks are included. Results are held in memory, not stored in localStorage.
+This add-on bundles the scanning and worker-based simulation code adapted from [oss!idle sim](https://github.com/oss-idle/addon-sim), pinned to oss!idle **1.2.5.0**. It scans **downloaded ranked 4K maps**, screens unlocked rates, and refines promising difficulties by averaging three simulations per map/rate/mod variant. In v0.5.1, it evaluates both **No Mod (NM)** and **Hard Rock (HR)**, using the game's tighter HR hit windows and **1.10x Accuracy XP multiplier**. HR is not inherently optimal: it may reduce hit quality or cause failures. Comparing both modes increases scan time. The simulated bot has the saved character's skills, with its physical performance adjusted for the entered fatigue and warm-up. Medals, failure rates, run durations, and play-rate unlocks are included. Results are held in memory, not stored in localStorage.
 
 The adaptive planner ranks by **expected XP/minute including transition overhead** and recomputes the rotation as the character, recent plays and fatigue inputs change. It models the official 24-hour Mindblock curve per map, the physical XP reduction from fatigue (5% floor), and a manual estimate of the physical strain share per play. It favors distinct maps and drops candidates below your minimum relative efficiency threshold. The summary displays **duration-weighted** total XP/minute rather than an unweighted mean of each map's rate.
 
@@ -83,6 +83,28 @@ All settings are **local to this device and browser profile** and can be
 lost if site storage is cleared. Saving an enabled skill preference does
 not mean auto-upgrades remain active after a restart.
 
+### Updated game mechanics and reconnection (v0.5.5)
+
+Coordination is now physical, fatigue-affected, and Mindblock-exempt
+as of official game version 1.2.5.0. This change is applied both to
+the pinned sim worker and our map optimizer. The game now displays
+Warm-up and Fatigue on a combined HUD bar; the planner still needs
+your manual estimated strained minutes because the authoritative
+accumulator is not available from its local bridge.
+
+During an *already approved* live queue session, temporary WebSocket
+drops retry up to five times (2s, 4s, 8s, 16s, 30s). To resume, the
+official server must confirm the same character and the optimizer's
+original managed queue label. If the queue was taken over elsewhere,
+the optimizer stops and NEVER restores it without a new approval.
+During initial queue takeover, an old-label snapshot is tolerated until
+the server confirms the owned queue; missing acknowledgement after
+12 seconds stops safely. A page/app/add-on reload does not reconnect
+automatically because consent is session-only. Once disconnected,
+the existing server queue can continue autonomously; the Stop button
+will warn if it could not clear the server queue. No real signed-in
+server session has yet verified this behavior.
+
 ### Starting safely
 
 1. Open **⚡ Smart Farm**, select a primary skill and fallback, then choose **Mod strategy**: Auto (best whole rotation), No Mod only, or HR only. Enter your current **strained fatigue minutes**. The game keeps its authoritative fatigue on the server and does **not** publish that number through the local add-on database, so this value must be entered or periodically corrected manually.
@@ -95,7 +117,7 @@ not mean auto-upgrades remain active after a restart.
 
 ### Build
 
-The source code under `src/engine/` and `src/farm/metrics.ts` is adapted from [oss-idle/addon-sim](https://github.com/oss-idle/addon-sim), upstream revision `b6c14fd`, licensed under **AGPL-3.0**. It includes our fatigue-aware worker changes. The game simulation dependency is pinned to oss!idle commit `890882870f319db36e8fa8a72d1cb5a8c553d35e` (game version 1.2.3.0). See `src/SOURCES.md` for provenance.
+The source code under `src/engine/` and `src/farm/metrics.ts` is adapted from [oss-idle/addon-sim](https://github.com/oss-idle/addon-sim), upstream revision `b6c14fd`, licensed under **AGPL-3.0**. It includes our fatigue-aware worker changes. The game simulation dependency is now pinned to official oss!idle v1.2.5.0 commit `7ebe02c6a98a4f9aaeb4a923aacbe6e5dae4e3ff`. v0.5.4 and earlier used game v1.2.3.0. See `src/SOURCES.md` for provenance.
 
 ```sh
 npm ci --ignore-scripts
@@ -107,4 +129,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 18 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 20 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.

@@ -1,7 +1,7 @@
 /* Pure, deterministic farming optimizer. Simulator results originate from addon-sim's
  * CharacterBot + ManiaGame worker. This module never mutates live game state. */
 export const FARM_SKILLS=['accuracy','speed','stamina','jackspeed','coordination','release','reading','consistency','concentration','speedjam','memory'];
-export const PHYSICAL=new Set(['speed','stamina','jackspeed']);
+export const PHYSICAL=new Set(['speed','stamina','jackspeed','coordination']);
 export const BLOCKED=new Set(FARM_SKILLS.filter(name=>!PHYSICAL.has(name)&&name!=='memory'));
 const cb=(x0,y0,x1,y1)=>{let ax=1-(x1=3*(x1-x0)-(x0*=3))-x0,ay=1-(y1=3*(y1-y0)-(y0*=3))-y0;return t=>{if(t<=0)return 0;if(t>=1)return 1;let r=t,s=0,d=1,x;for(let i=0;i<32;i++){x=r*(r*(r*ax+x1)+x0)-t;if(Math.abs(x)<1e-5)break;const dv=r*(r*(r*ax*3+x1*2)+x0);if(Math.abs(dv)<1e-5)break;r-=x/dv;}if(r<0||r>1){r=t;for(let i=0;i<60;i++){x=r*(r*(r*ax+x1)+x0);if(Math.abs(x-t)<1e-5)break;if(t>x)s=r;else d=r;r=(d+s)/2;}}return r*(r*(r*ay+y1)+y0);};};
 const CURVE=cb(.6,0,.6,1),FATIGUE_CURVE=cb(.4,0,.6,1);
