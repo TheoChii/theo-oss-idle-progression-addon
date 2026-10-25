@@ -1,6 +1,6 @@
-## Smart Farm / Auto Queue (experimental, v0.5.2)
+## Smart Farm / Auto Queue (experimental, v0.5.3)
 
-The Smart Farm panel is part of the **same installed toolkit**, opened from the **⚡ Smart Farm** floating button or **Ctrl+Shift+G**. The original **Ctrl+Shift+P** calculator and its features are preserved.
+The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
 ### How the optimization works
 
@@ -61,4 +61,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 14 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 16 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
