@@ -18,6 +18,7 @@ import { medalXPMultiplier } from '@oss-idle/shared/achievements/catalogue';
 import { hasUnlock } from '@oss-idle/shared/rebirth';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { withTimeout } from '../scanGuard.js';
+import { parseMapEligibility } from '../mapEligibility.js';
 import { desktopLibrary, desktopSnapshot, desktopIndex, desktopJobCharts } from '../desktopMaps.js';
 import createSimWorker from 'worker:./sim.worker';
 import type {
@@ -378,29 +379,20 @@ export const medalMultiplier = async (character: CharacterRow, signal?: AbortSig
 	}
 };
 
-/**
- * Ids of the difficulties ranked on the game server, or `undefined` when the
- * server cannot be reached.
- *
- * Only these pay an account character XP: the server simulates a play on a
- * live difficulty and answers any other as unranked, which the client plays
- * locally for no XP. The intro set is in the catalog but is not live.
- */
-export const rankedDifficulties = async (signal?: AbortSignal): Promise<Set<number> | undefined> => {
-	try {
-		const res = await withTimeout('Ranked map catalog API',12000,timeoutSignal => fetch(`${API_URL}/v1/beatmap/catalog`,{signal:signal ?? timeoutSignal}));
-		if (!res.ok) return undefined;
-		const { intro, beatmaps } = await res.json() as {
-			intro?: { id: number };
-			beatmaps: { id: number; versions: { id: number }[] }[];
-		};
-		return new Set(beatmaps
-			.filter(set => set.id !== intro?.id)
-			.flatMap(set => set.versions.map(version => version.id)));
-	} catch {
-		return undefined;
-	}
+
+/** Approved live catalog: Ranked and Loved both pay XP; Loved awards no PP.
+ * The ranked flag is true for BOTH, so use the explicit loved field. */
+export const catalogDifficulties = async (signal?: AbortSignal) => {
+ try{
+  const res = await withTimeout('Approved map catalog API',12000,timeoutSignal =>
+   fetch(API_URL+'/v1/beatmap/catalog',{signal:signal??timeoutSignal}));
+  if(!res.ok)return undefined;
+  return parseMapEligibility(await res.json());
+ }catch{return undefined;}
 };
+/** Legacy helper for callers expecting XP-paying approved maps. */
+export const rankedDifficulties = async(signal?:AbortSignal):Promise<Set<number>|undefined> =>
+ (await catalogDifficulties(signal))?.xp;
 
 export type MapInfo = {
 	setId: number;

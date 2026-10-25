@@ -1,4 +1,4 @@
-## Smart Farm / Auto Queue (experimental, v0.5.8)
+## Smart Farm / Auto Queue (experimental, v0.5.9)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.
 
@@ -199,6 +199,33 @@ scan and benchmark destroys temporary GPU resources. Existing
 settings export/import includes the boolean option. No new
 account-authorized actions are performed.
 
+### Loved maps support (v0.5.9, official oss!idle 1.2.6.0)
+
+The game's new **Loved** maps are played on the server and earn skill
+XP, ranked score, grades and leaderboards, but cannot earn performance
+points. The public catalog's ranked=true is now an approval flag, not
+a guarantee of PP payout. Smart Farm explicitly parses loved=true.
+
+**Skill XP mode** scans Ranked and Loved downloaded approved 4K charts
+at the requested NM/HR rates. You can farm XP on both. **PP Farm**
+scans only Ranked charts, avoiding Loved maps regardless of their
+simulated potential PP. The result table labels Loved XP-only maps.
+Ranked -> Loved reclassifications cause old best-PP values in local
+history to become stale: Smart Farm filters the PP baseline to the
+live approved Ranked-only catalog, not trusting old offline snapshots.
+
+The official v1.2.6.0 patch also added a warm-up direction indicator
+to the HUD. Smart Farm's existing fatigue simulator and manual
+strained-minute input remain valid; the arrows are not a new XP
+calculation. Loved maps do not qualify for some star/rice/LN and
+first-place medals; Smart Farm already retrieves official online
+medal bonuses instead of calculating those medals locally.
+Status search, update notifications, add-on cleanup fixes and desktop
+library fixes require no special action from the read-only scanner.
+
+The game's revised bulk map download throttling does not affect
+Smart Farm directly, because it does not download map packs.
+
 ### Starting safely
 
 1. Open **⚡ Smart Farm**, select a primary skill and fallback, then choose **Mod strategy**: Auto (best whole rotation), No Mod only, or HR only. Enter your current **strained fatigue minutes**. The game keeps its authoritative fatigue on the server and does **not** publish that number through the local add-on database, so this value must be entered or periodically corrected manually.
@@ -223,4 +250,4 @@ The final self-contained `dist/progression-toolkit.addon.js` bundles all depende
 
 ### Testing status
 
-All 24 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
+All 25 automated test suites run under `npm test`, including an isolated simulated official WebSocket protocol test verifying explicit approval, account identity, queue replacement, idle scheduling, pausing and restoring Autopilot and previous global mods. Includes synthetic HR/NM XP strategy tests and source-level checks of the pinned game simulation. These are **mocks**, not a test against the live service.
