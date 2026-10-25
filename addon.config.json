@@ -1,9 +1,11 @@
 {
   "name": "Theo's oss!idle Progression Toolkit",
-  "entry": "progression-toolkit.addon.js",
+  "entry": "src/index.js",
   "outfile": "dist/progression-toolkit.addon.js",
   "types": [
     "gameplay"
   ],
-  "sharedReact": false
+  "sharedReact": true,
+  "license": "AGPL-3.0-only",
+  "gameVersion": "1.2.3.0"
 }
