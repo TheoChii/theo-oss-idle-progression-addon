@@ -1,9 +1,10 @@
 import {gameCharacter, recentPlayCounts, gameDb} from '@oss-idle/addon-sdk';
-import {collectCharts, runSweep, ratesFor, rankedDifficulties, medalMultiplier} from './engine/client.js';
+import {collectCharts, runSweep, ratesFor, catalogDifficulties, medalMultiplier} from './engine/client.js';
 import {rankMaps, screenRates, refinePlan, PLAYS_PER_MAP} from './farm/metrics.js';
 import {FARM_SKILLS, optimizeFarm, prestigeReady, fatigueKeep} from './optimizer.js';
 import {optimizePP} from './ppFarm.js';
 import {readBestPP} from './ppHistory.js';
+import {filterBestPP} from './mapEligibility.js';
 import {withTimeout} from './scanGuard.js';
 import {gpuScorer,hybridRefineCandidates,benchmarkGpu} from './gpuAssist.js';
 import {createChartCache,createLimiter} from './scanCache.js';
@@ -28,7 +29,7 @@ export class SmartFarm {
   this.s={...defaults};try{const old=JSON.parse(localStorage.getItem(SETTINGS)||'{}');for(const k of Object.keys(defaults)){if(Object.hasOwn(old,k)&&k!=='liveQueue'&&k!=='autoPlaylist')this.s[k]=old[k];}}catch{}
   this.scanning=false;this.live=false;this.sweep=null;this.results=[];this.recent=new Map();this.medals=1;this.ppHistory=null;this.lastPpFetch=0;
   this.character=null;this.plan=null;this.modPlans=null;this.root=null;this.shadow=null;this.visible=false;this.error='';this.message='';
-  this.progress='Not scanned';this.scanWarning='';this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
+  this.progress='Not scanned';this.scanWarning='';this.lovedIds=new Set();this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
   this.socket=null;this.serverQueue=null;this.socketCharacterId=null;this.playActive=false;this.lastChange=0;this.previousMode=null;this.previousMods=null;
   this.tickInterval=null;this.keyHandler=null;this.consent=false;this.session=0;this.starting=false;
   // Explicit consent is session-only. Retry temporary WebSocket failures, but
@@ -233,14 +234,22 @@ export class SmartFarm {
    await this.loadState();
    if(my!==this.session)throw Error('Scan cancelled.');
    const c=this.character;
-   this.setProgress(c.local?'Offline character: checking downloaded maps…':'Fetching ranked map catalog…');
-   const ranked=c.local?undefined:await withTimeout('Ranked map catalog',15000,signal=>rankedDifficulties(signal));
+   if(this.s.goal==='pp'&&c.local)throw Error('PP farming requires a signed-in online character; Loved maps never earn PP.');
+   this.setProgress(c.local?'Offline character: checking downloaded maps…':'Fetching approved map catalog (Ranked + Loved)…');
+   const catalog=c.local?undefined:await withTimeout('Approved map catalog',15000,signal=>catalogDifficulties(signal));
    if(my!==this.session)throw Error('Scan cancelled.');
-   if(!c.local&&!ranked)throw Error('Ranked map catalog unavailable. Check your game connection and retry; only ranked maps count for online XP.');
-   this.setProgress('Reading downloaded map metadata…');
-   const survey=await withTimeout('Downloaded map library',15000,()=>collectCharts(ranked));
+   if(!c.local&&!catalog)throw Error('Approved map catalog unavailable. Check your connection and retry; only approved maps can earn online XP.');
+   // Remove stale local bests from when a map was Ranked before becoming Loved.
+   this.lovedIds=catalog?.loved??new Set();
+   if(this.s.goal==='pp'&&catalog&&this.ppHistory)
+    this.ppHistory.best=filterBestPP(this.ppHistory.best,catalog.pp);
+   const eligible=this.s.goal==='pp'?catalog?.pp:catalog?.xp;
+   this.setProgress('Reading downloaded '+(this.s.goal==='pp'?'Ranked':'approved Ranked/Loved')+' map metadata…');
+   const survey=await withTimeout('Downloaded map library',15000,()=>collectCharts(eligible));
    if(my!==this.session)throw Error('Scan cancelled.');
-   if(!survey.requests.length)throw Error('No downloaded ranked 4K difficulties found to simulate.');
+   if(!survey.requests.length)throw Error(this.s.goal==='pp'
+    ?'No downloaded Ranked 4K difficulties found for PP. Loved maps give XP but no PP.'
+    :'No downloaded approved (Ranked or Loved) 4K difficulties found to simulate.');
    const rates=ratesFor(Number(c.speedUpgrades)||0,[]);
    const screened=screenRates(rates);
    const modModes=activeModModes(this.s.modPreference);
@@ -296,7 +305,9 @@ export class SmartFarm {
    }
    this.results=results;this.scannedAt=Date.now();this.pendingRescan=false;
    await this.replan();
-   this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts, '+results.length+' rate/mod simulations · '+modModes.join('/')+' · '+chartCache.stats.hits+' cached chart reuses'+(this.s.goal==='pp'?' · PP bests: '+(this.ppHistory?.source||'not loaded'):''));
+   this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts ('+
+    (this.s.goal==='pp'?'Ranked PP only':results.filter(x=>this.lovedIds.has(x.beatmapId)).length+' Loved XP rate/mod entries')+
+    '), '+results.length+' rate/mod simulations · '+modModes.join('/')+' · '+chartCache.stats.hits+' cached chart reuses'+(this.s.goal==='pp'?' · PP bests: '+(this.ppHistory?.source||'not loaded'):''));
    if(this.live)await this.publish();
   }catch(e){if(my===this.session){
    const where=this.progress;
@@ -593,7 +604,7 @@ export class SmartFarm {
    '<div class="summary"><strong>'+nice(p.expectedPerMinute)+' XP/min</strong><span>Selected '+p.mod+' · duration-weighted XP/min</span><strong>'+nice(p.fatigueAfter,1)+' min</strong><span>Projected strain after rotation</span></div>'):'';
   const comparison=this.modPlans?(ppMode?'<p class="hint">No Mod: '+(this.s.modPreference==='HR'?'not scanned':'+'+nice(this.modPlans.NM.expectedPPGain,2)+' PP ('+nice(this.modPlans.NM.expectedPPGainPerMinute,2)+' PP/min)')+' · HR: '+(this.s.modPreference==='NM'?'not scanned':'+'+nice(this.modPlans.HR.expectedPPGain,2)+' PP ('+nice(this.modPlans.HR.expectedPPGainPerMinute,2)+' PP/min)')+'. One global mod selection, separate song rates.</p>':
     '<p class="hint">No Mod: '+(this.s.modPreference==='HR'?'not scanned':nice(this.modPlans.NM.expectedPerMinute)+' XP/min')+' · Hard Rock: '+(this.s.modPreference==='NM'?'not scanned':nice(this.modPlans.HR.expectedPerMinute)+' XP/min')+'. Mod applies to the entire rotation; rates vary per song.</p>'):'';
-  const html='<p class="intro">'+(ppMode?'PP Farm scans ranked downloaded 4K maps for <b>new personal-best PP</b>. Ranked total is weighted by 0.95 per rank; no repeated XP farming. It compares unlocked rates and NM/HR.':'Simulate downloaded ranked 4K maps at unlocked rates with <b>No Mod and Hard Rock</b> (HR has tighter windows and +10% Accuracy XP). Compare realistic XP per minute after Mindblock and fatigue.')+'</p>'+
+  const html='<p class="intro">'+(ppMode?'PP Farm scans <b>Ranked-only</b> downloaded 4K maps for new personal-best PP (Loved earns XP, but NO PP). Ranked total is weighted by 0.95 per rank; no repeated XP farming. It compares unlocked rates and NM/HR.':'Simulate downloaded <b>Ranked and Loved</b> approved 4K maps for XP at unlocked rates with <b>No Mod and Hard Rock</b> (HR has tighter windows and +10% Accuracy XP). Compare realistic XP per minute after Mindblock and fatigue.')+'</p>'+
    '<label>Farming goal<select data-setting="goal">'+[['xp','Skill XP / Prestige'],['pp','PP / Rank improvement']].map(([v,l])=>option(v,l,this.s.goal)).join('')+'</select></label>'+
    '<div class="group">'+(ppMode?'<label>PP priority<select data-setting="ppRank">'+[['gainPerMinute','Weighted PP gain / minute'],['gain','Highest weighted PP gain']].map(([v,l])=>option(v,l,this.s.ppRank)).join('')+'</select></label>'+field('ppMinGain','Minimum weighted PP improvement per map',0.01,100,0.25):select('focus','Primary XP skill',FOCUS)+select('backup','Switch to when physical XP ≤ threshold or prestige-ready',FALLBACK))+
    '<label>Mod strategy<select data-setting="modPreference">'+[['auto','Auto: best whole rotation'],['NM','No Mod only'],['HR','Hard Rock only']].map(([value,label])=>option(value,label,this.s.modPreference)).join('')+'</select></label>'+
@@ -609,8 +620,9 @@ export class SmartFarm {
    (this.scanWarning?'<p class="notice">'+esc(this.scanWarning)+'</p>':'')+
    (p?summary+comparison+(ppMode?'<p class="hint">Existing PP source: '+esc(this.ppHistory?.source||'not available')+'. Projections are probabilistic and actual weighted PP depends on your server PBs; rescan after upgrades.</p>':'')+
      (p.reason?'<p class="notice">'+esc(p.reason)+'</p>':'')+
-     '<div class="scroll"><table><thead><tr><th>#</th><th>Beatmap ID</th><th>Rate</th><th>Mod</th>'+(ppMode?'<th>Simulated PP</th><th>Previous best</th><th>Weighted gain</th>':'<th>Target</th><th>Est. XP/min</th><th>Fatigue</th>')+'</tr></thead><tbody>'+
-     p.rotation.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+x.beatmapId+'</td><td>'+nice(x.rate,2)+'×</td><td>'+esc(x.mod||p.mod)+'</td>'+(ppMode?'<td>'+nice(x.expectedPP,2)+'</td><td>'+nice(x.previousPP,2)+'</td><td>+'+nice(x.ppGain,2)+'</td>':'<td>'+esc(x.target)+'</td><td>'+nice(x.xpPerMinute)+'</td><td>'+nice(x.physicalKept*100,1)+'%</td>')+'</tr>').join('')+'</tbody></table></div>':'<p class="hint">Scan once to calculate a rotation.</p>')+
+     '<div class="scroll"><table><thead><tr><th>#</th><th>Beatmap ID</th><th>Status</th><th>Rate</th><th>Mod</th>'+(ppMode?'<th>Simulated PP</th><th>Previous best</th><th>Weighted gain</th>':'<th>Target</th><th>Est. XP/min</th><th>Fatigue</th>')+'</tr></thead><tbody>'+
+     p.rotation.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+x.beatmapId+'</td><td>'+
+      (this.lovedIds.has(x.beatmapId)?'Loved · XP only':'Ranked')+'</td><td>'+nice(x.rate,2)+'×</td><td>'+esc(x.mod||p.mod)+'</td>'+(ppMode?'<td>'+nice(x.expectedPP,2)+'</td><td>'+nice(x.previousPP,2)+'</td><td>+'+nice(x.ppGain,2)+'</td>':'<td>'+esc(x.target)+'</td><td>'+nice(x.xpPerMinute)+'</td><td>'+nice(x.physicalKept*100,1)+'%</td>')+'</tr>').join('')+'</tbody></table></div>':'<p class="hint">Scan once to calculate a rotation.</p>')+
    this.renderUpgradeSettings()+
    '<div class="danger"><h3>Live auto queue (explicit opt-in)</h3><p>Replaces the active server queue and its global mod selection with the optimized rotation. Can select NM/HR for the whole queue as fatigue changes, but cannot mix mods within a single queue (unlike per-map rates). It never interrupts a currently playing song. Only use on your logged-in character.</p><label class="consent"><input type="checkbox" id="farm-consent"'+(this.consent?' checked':'')+(this.live?' disabled':'')+'> Replace my current game queue, set session-wide mods (NM/HR), and set Autopilot to Playlist</label>'+
    '<div class="actions"><button id="farm-start"'+(!this.consent||!p?.rotation?.length||this.wantLive||this.live||this.starting?' disabled':'')+'>▶ Start live optimizer</button><button id="farm-stop"'+(!this.wantLive&&!this.live&&!this.starting&&!this.reconnecting?' disabled':'')+'>■ Stop and clear managed queue</button></div>'+

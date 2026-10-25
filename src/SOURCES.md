@@ -3,7 +3,7 @@
 - Origin: https://github.com/oss-idle/addon-sim
 - Upstream revision inspected: `b6c14fd` (2026-10-24)
 - Files adapted: `src/engine/*.ts`, `src/farm/metrics.ts`, `scripts/bundle-plugins.mjs`, and `scripts/resolve-game.mjs`.
-- Current simulation: https://github.com/oss-idle/oss-idle commit `7ebe02c6a98a4f9aaeb4a923aacbe6e5dae4e3ff`; official v1.2.5.0 tag. Former v0.5.0-v0.5.4 toolkit releases pinned 1.2.3.0 commit `890882870f319db36e8fa8a72d1cb5a8c553d35e`.
+- Current simulation: https://github.com/oss-idle/oss-idle commit `f999af7cf0bdf431a83d675529e1fcb05514b88a`; official v1.2.6.0 tag. Prior toolkit releases v0.5.5-v0.5.8 pinned game v1.2.5.0 `7ebe02c6a98a4f9aaeb4a923aacbe6e5dae4e3ff`; v0.5.0-v0.5.4 pinned game 1.2.3.0 `890882870f319db36e8fa8a72d1cb5a8c553d35e`.
 - Changes in toolkit: worker now accepts a manual fatigue-minute snapshot and simulates physical skills with the game's `tiredSkills` and `warmup` model; pure adaptive optimizer, playlist writer, and opt-in live queue.
 - License: AGPL-3.0-only. See upstream projects for copyright holders. All source is retained in this public repository.
 
@@ -23,3 +23,4 @@
 
 - v0.5.7: retains official v1.2.5.0 game's simulation and worker protocol. Adds read-only parallel desktop map-file access with one scan-global concurrency cap of four; transient 64 MiB chart text cache; selective NM/HR worker inputs and candidate refinement based on existing XP/PP ranking. Does not change game code or server PP/XP formulas.\n
 - v0.5.8: optional experimental hybrid GPU refinement scoring uses the standard WebGPU compute-shader API (navigator.gpu, WGSL, GPUBuffer storage + readback). CPU and GPU computed scores are validated for parity and all game simulation remains on pinned official v1.2.5.0 CPU workers. Unsupported WebGPU or numerical mismatch triggers CPU fallback. Chromium Linux WebGPU for Intel Gen9 is not guaranteed.\n
+- v0.5.9: oss!idle v1.2.6.0 adds Loved approved maps: ranked=true on both Ranked/Loved in the catalog, but loved=true separates no-PP status. XP planner includes both categories, PP planner and prior PP baseline include only ranked approved maps. New HUD warmup trend is presentation-only; no fatigue formula changes. Medals exclude Loved for star/rice/LN/#1 categories but toolkit uses server multiplier.
