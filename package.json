@@ -1,6 +1,6 @@
 {
   "name": "theo-oss-idle-progression-addon",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -11,13 +11,13 @@
   },
   "scripts": {
     "build": "node scripts/build-addon.mjs",
-    "test": "node test-addon-hotkey.mjs && node test-skill-improvement.mjs && node test-overdrive-layout.mjs && node test-map-discovery.mjs && node test-medal-bonuses.mjs && node test-fatigue-player-stats.mjs && node test-auto-medal-sync.mjs && node test-warmup-planner.mjs && node test-friend-manager.mjs && node test-smart-farm.mjs && node test-smart-queue-transport.mjs && node test-sim-mods.mjs && node test-pp-farm.mjs && node test-pp-history.mjs && node test-smart-farm-hotkey.mjs && node test-auto-upgrade-rules.mjs && node test-auto-upgrade-live.mjs"
+    "test": "node test-addon-hotkey.mjs && node test-skill-improvement.mjs && node test-overdrive-layout.mjs && node test-map-discovery.mjs && node test-medal-bonuses.mjs && node test-fatigue-player-stats.mjs && node test-auto-medal-sync.mjs && node test-warmup-planner.mjs && node test-friend-manager.mjs && node test-smart-farm.mjs && node test-smart-queue-transport.mjs && node test-sim-mods.mjs && node test-pp-farm.mjs && node test-pp-history.mjs && node test-smart-farm-hotkey.mjs && node test-auto-upgrade-rules.mjs && node test-auto-upgrade-live.mjs && node test-smart-queue-reconnect.mjs && node test-game-v125-compat.mjs"
   },
   "dependencies": {
     "@lingui/core": "^5.9.5",
     "@lingui/message-utils": "^5.9.5",
     "@oss-idle/addon-sdk": "^0.8.0",
-    "oss-idle": "https://codeload.github.com/oss-idle/oss-idle/tar.gz/890882870f319db36e8fa8a72d1cb5a8c553d35e",
+    "oss-idle": "https://codeload.github.com/oss-idle/oss-idle/tar.gz/7ebe02c6a98a4f9aaeb4a923aacbe6e5dae4e3ff",
     "osu-classes": "^3.1.0",
     "osu-mania-stable": "^5.0.1",
     "osu-parsers": "^4.1.0",

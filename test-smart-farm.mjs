@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
-import {optimizeFarm,findTargets,prestigeReady,fatigueKeep,mindblockKeep} from './src/optimizer.js';
+import {optimizeFarm,findTargets,prestigeReady,fatigueKeep,mindblockKeep,PHYSICAL,BLOCKED} from './src/optimizer.js';
 const approx=(a,b)=>assert(Math.abs(a-b)<1e-7, a+' != '+b);
 approx(fatigueKeep(0),1);approx(fatigueKeep(300),1);approx(fatigueKeep(420),.05);
 approx(mindblockKeep(0),1);approx(mindblockKeep(25),.25);
 assert(prestigeReady({level:100,prestige:0}));assert(!prestigeReady({level:100,prestige:1}));
 assert.deepEqual(findTargets({speed:{level:100,prestige:0},accuracy:{level:50,prestige:0}},'speed','accuracy',0).skills,['accuracy']);
 assert.equal(findTargets({},'speed','accuracy',420,.1).target,'accuracy');
+assert(PHYSICAL.has('coordination'),'1.2.5.0 classifies Coordination as physical');
+assert(!BLOCKED.has('coordination'),'Coordination is no longer Mindblocked');
+assert.equal(findTargets({},'coordination','reading',420,.1).target,'reading');
+const coord={setId:9,beatmapId:99,rate:1,durationSec:60,failRate:0,mod:'NM',xp:{coordination:1000}};
+const coordFresh=optimizeFarm({results:[coord],focus:'coordination',recent:new Map([[99,25]]),slots:1,fatigueMinutes:0});
+assert.equal(coordFresh.rotation[0].expectedXp,1000,'Coordination repetitions are Mindblock-exempt');
+const coordTired=optimizeFarm({results:[coord],focus:'coordination',recent:new Map([[99,25]]),slots:1,fatigueMinutes:400,cutoff:.01});
+assert(coordTired.rotation[0].expectedXp<1000,'physical fatigue applies to Coordination');
+
 assert.equal(findTargets({},'speed','stop',420,.1).skills.length,0);
 const a={setId:1,beatmapId:10,rate:1,durationSec:60,failRate:0,xp:{speed:2000,accuracy:100,reading:50}};
 const b={setId:2,beatmapId:11,rate:1.5,durationSec:60,failRate:0,xp:{speed:200,accuracy:1400,reading:800}};
