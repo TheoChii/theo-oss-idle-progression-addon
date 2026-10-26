@@ -1,6 +1,6 @@
 {
   "name": "theo-oss-idle-progression-addon",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "node scripts/build-addon.mjs",
-    "test": "node test-addon-hotkey.mjs && node test-skill-improvement.mjs && node test-overdrive-layout.mjs && node test-map-discovery.mjs && node test-medal-bonuses.mjs && node test-fatigue-player-stats.mjs && node test-auto-medal-sync.mjs && node test-warmup-planner.mjs && node test-friend-manager.mjs && node test-smart-farm.mjs && node test-smart-queue-transport.mjs && node test-sim-mods.mjs && node test-pp-farm.mjs && node test-pp-history.mjs && node test-smart-farm-hotkey.mjs && node test-auto-upgrade-rules.mjs && node test-auto-upgrade-live.mjs && node test-smart-queue-reconnect.mjs && node test-game-v126-compat.mjs && node test-scan-initialization.mjs && node test-desktop-map-library.mjs && node test-scan-performance.mjs && node test-hybrid-gpu.mjs && node test-loved-maps.mjs"
+    "test": "node test-addon-hotkey.mjs && node test-skill-improvement.mjs && node test-overdrive-layout.mjs && node test-map-discovery.mjs && node test-medal-bonuses.mjs && node test-fatigue-player-stats.mjs && node test-auto-medal-sync.mjs && node test-warmup-planner.mjs && node test-friend-manager.mjs && node test-smart-farm.mjs && node test-smart-queue-transport.mjs && node test-sim-mods.mjs && node test-pp-farm.mjs && node test-pp-history.mjs && node test-smart-farm-hotkey.mjs && node test-auto-upgrade-rules.mjs && node test-auto-upgrade-live.mjs && node test-smart-queue-reconnect.mjs && node test-game-v126-compat.mjs && node test-scan-initialization.mjs && node test-desktop-map-library.mjs && node test-scan-performance.mjs && node test-hybrid-gpu.mjs && node test-loved-maps.mjs && node test-fatigue-safety.mjs"
   },
   "dependencies": {
     "@lingui/core": "^5.9.5",

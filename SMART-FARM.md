@@ -1,3 +1,10 @@
+> **v0.5.10 fatigue compatibility:** The newer server may accumulate fatigue
+> faster than the public simulator. Live-bound maps now assume maximum
+> exhaustion (420 strained minutes) and must survive 16 repeated simulated
+> plays without failure before any queue or playlist write. A previous
+> 0-minute setting cannot override this. Other calculator fatigue settings
+> are unchanged. Existing unsafe server queues must be paused separately.
+>
 ## Smart Farm / Auto Queue (experimental, v0.5.9)
 
 The Smart Farm panel is part of the **same installed toolkit**, opened and closed with **Ctrl+Shift+G** (no floating button). The original **Ctrl+Shift+P** calculator and its features are preserved.

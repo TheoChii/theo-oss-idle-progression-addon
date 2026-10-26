@@ -9,6 +9,7 @@ import {withTimeout} from './scanGuard.js';
 import {gpuScorer,hybridRefineCandidates,benchmarkGpu} from './gpuAssist.js';
 import {createChartCache,createLimiter} from './scanCache.js';
 import {activeModModes,refineBudget,eligibleRefineRows,combineRefinementJobs} from './scanStrategy.js';
+import {WORST_CASE_FATIGUE_MINUTES,SAFETY_REFINEMENT_RUNS,safeRefinedRows,canPublishSafePlan} from './farm/safety.js';
 import {applyUpgrade} from '@oss-idle/shared/upgrades';
 import {makePolicies,checkUpgrade,configExport,configImport,MAX_TIERS,MAX_OD} from './autoUpgradeRules.js';
 
@@ -18,7 +19,7 @@ const UPGRADE_SETTINGS='oss-idle-addon:theo-auto-upgrade-policies-v1';
 const API='https://api.oss.idle.rhythmgamers.net/v1';
 const FOCUS=['all',...FARM_SKILLS];
 const FALLBACK=['accuracy','nonphysical','all','stop',...FARM_SKILLS.filter(s=>s!=='accuracy')];
-const defaults={goal:'xp',ppRank:'gainPerMinute',ppMinGain:0.25,focus:'speed',backup:'accuracy',fatigueMinutes:0,physicalShare:40,cutoff:10,overheadSec:8,slots:10,
+const defaults={goal:'xp',ppRank:'gainPerMinute',ppMinGain:0.25,focus:'speed',backup:'accuracy',fatigueMinutes:WORST_CASE_FATIGUE_MINUTES,physicalShare:40,cutoff:10,overheadSec:8,slots:10,
  minEfficiency:65,scanInterval:20,modPreference:'auto',gpuAssist:false,autoPlaylist:false,liveQueue:false};
 const asNumber=(v,min,max,fallback)=>Number.isFinite(Number(v))?Math.max(min,Math.min(max,Number(v))):fallback;
 const esc=v=>String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -27,6 +28,10 @@ const nice=(n,d=0)=>Number.isFinite(n)?Number(n).toLocaleString('en-US',{maximum
 export class SmartFarm {
  constructor(){
   this.s={...defaults};try{const old=JSON.parse(localStorage.getItem(SETTINGS)||'{}');for(const k of Object.keys(defaults)){if(Object.hasOwn(old,k)&&k!=='liveQueue'&&k!=='autoPlaylist')this.s[k]=old[k];}}catch{}
+  // Never inherit a persisted rested estimate from pre-fatigue-update builds.
+  // The public 1.2.7.3 server formula is not available to our pinned 1.2.6.0 sim.
+  this.s.fatigueMinutes=WORST_CASE_FATIGUE_MINUTES;
+  this.safetyReady=false;
   this.scanning=false;this.live=false;this.sweep=null;this.results=[];this.recent=new Map();this.medals=1;this.ppHistory=null;this.lastPpFetch=0;
   this.character=null;this.plan=null;this.modPlans=null;this.root=null;this.shadow=null;this.visible=false;this.error='';this.message='';
   this.progress='Not scanned';this.scanWarning='';this.lovedIds=new Set();this.scannedAt=0;this.lastCharacterId=null;this.appliedKey='';this.owner=false;
@@ -142,7 +147,7 @@ export class SmartFarm {
     if((k==='goal'&&previousGoal!==this.s.goal)||(k==='modPreference'&&previousMod!==this.s.modPreference)){
      if(this.wantLive||this.live||this.starting)this.stopLive(true);
      this.sweep?.cancel();this.session++;this.scanning=false;
-     this.results=[];this.plan=null;this.modPlans=null;this.scannedAt=0;
+     this.results=[];this.plan=null;this.modPlans=null;this.safetyReady=false;this.scannedAt=0;
      this.progress='Changed farming strategy; preparing a fresh scan for '+(this.s.goal==='pp'?'PP':'XP')+' and '+this.s.modPreference+'.';
      this.render();void this.scan();
     }else{this.replan().catch(x=>this.fail(x));this.render();}
@@ -225,7 +230,7 @@ export class SmartFarm {
  }
  async scan(){
   if(this.scanning)return;
-  this.scanning=true;this.error='';this.scanWarning='';const my=++this.session;
+  this.scanning=true;this.error='';this.scanWarning='';this.safetyReady=false;const my=++this.session;
   const chartCache=createChartCache();
   const ioLimiter=createLimiter(4);
   let gpu=null;
@@ -255,7 +260,7 @@ export class SmartFarm {
    const modModes=activeModModes(this.s.modPreference);
    const run=async(requests,runs,label)=>{
     this.setProgress(label+' · '+requests.length+' maps');
-    const sweep=await withTimeout('Preparing simulation workers',20000,()=>runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),modModes,chartCache,ioLimiter,folderIndex:survey.folderIndex},
+    const sweep=await withTimeout('Preparing simulation workers',20000,()=>runSweep(requests,{characterId:c.id,runs,memoryAhead:PLAYS_PER_MAP/2,fatigueMinutes:WORST_CASE_FATIGUE_MINUTES,modModes,chartCache,ioLimiter,folderIndex:survey.folderIndex},
       progress=>{if(my===this.session&&progress.done%5===0)this.setProgress(label+' '+progress.done+'/'+progress.total);}));
     if(my!==this.session){sweep.cancel();throw Error('Scan cancelled.');}
     this.sweep=sweep;const answer=await sweep.finished;
@@ -299,16 +304,29 @@ export class SmartFarm {
     }
    }
    const selected=combineRefinementJobs(jobs);
-   if(selected.length){const refined=await run(selected,3,'Refining');
-    const keys=new Set(refined.map(x=>x.beatmapId+'@'+x.rate+'@'+x.mod));
-    results=results.filter(x=>!keys.has(x.beatmapId+'@'+x.rate+'@'+x.mod)).concat(refined);
+   // Screening is a one-run candidate search ONLY, never queue evidence.
+   // On the updated server, current fatigue isn't accessible to add-ons.
+   // Test selected maps at maximum exhaustion and require zero observed fails
+   // across 16 actual gameplay simulations before recommending them at all.
+   const refined=selected.length?await run(selected,SAFETY_REFINEMENT_RUNS,'Safety refinement'):[];
+   results=safeRefinedRows(refined,{
+    fatigueMinutes:WORST_CASE_FATIGUE_MINUTES,runs:SAFETY_REFINEMENT_RUNS,
+   });
+   this.results=results;this.safetyReady=true;this.scannedAt=Date.now();this.pendingRescan=false;
+   if(!results.length){
+    this.plan=null;this.modPlans=null;
+    this.scanWarning=(this.scanWarning?this.scanWarning+' ':'')+'No maps passed exhausted 16-run zero-failure checks. Do not autoplay this rotation; rest, lower rates or wait for the game simulator to be updated.';
+    if(this.live){
+     // Clear only this add-on's OWN confirmed managed queue. Otherwise leave
+     // the other controller's queue intact and warn the player.
+     this.stopLive(true);
+    }
    }
-   this.results=results;this.scannedAt=Date.now();this.pendingRescan=false;
    await this.replan();
    this.setProgress('Ready · '+new Set(results.map(x=>x.beatmapId)).size+' charts ('+
     (this.s.goal==='pp'?'Ranked PP only':results.filter(x=>this.lovedIds.has(x.beatmapId)).length+' Loved XP rate/mod entries')+
     '), '+results.length+' rate/mod simulations · '+modModes.join('/')+' · '+chartCache.stats.hits+' cached chart reuses'+(this.s.goal==='pp'?' · PP bests: '+(this.ppHistory?.source||'not loaded'):''));
-   if(this.live)await this.publish();
+   if(this.live&&this.safetyReady&&this.results.length)await this.publish();
   }catch(e){if(my===this.session){
    const where=this.progress;
    this.progress='Scan failed during '+where+': '+(e?.message||String(e));
@@ -326,12 +344,12 @@ export class SmartFarm {
   return v.filter(Boolean);
  }
  async replan(){
-  if(!this.results.length)return;
+  if(!this.results.length){this.plan=null;this.modPlans=null;this.render();return;}
   const c=this.character;
   if(!c)return;
   const states=Object.fromEntries(FARM_SKILLS.map(k=>[k,{level:Number(c[k])||0,prestige:Number(c[k+'Prestige'])||0}]));
   const options={results:this.results,recent:this.recent,states,
-   focus:this.s.focus,backup:this.s.backup,fatigueMinutes:asNumber(this.s.fatigueMinutes,0,420,0),
+   focus:this.s.focus,backup:this.s.backup,fatigueMinutes:WORST_CASE_FATIGUE_MINUTES,
    cutoff:asNumber(this.s.cutoff,1,100,10)/100,physicalShare:asNumber(this.s.physicalShare,0,100,40)/100,
    overheadSec:asNumber(this.s.overheadSec,0,120,8),slots:asNumber(this.s.slots,1,50,10),
    minEfficiency:asNumber(this.s.minEfficiency,1,100,65)/100,medals:this.medals};
@@ -361,7 +379,8 @@ export class SmartFarm {
   }catch(e){this.fail(e);}
  }
  async savePlaylist(){
-  if(!this.plan?.rotation.length)throw Error('No maps to save; scan first.');
+  if(!this.plan?.rotation.length||!this.safetyReady||!canPublishSafePlan(this.plan,this.results))
+   throw Error('Playlist blocked until a worst-case zero-failure scan succeeds.');
   await gameDb.ready();
   const rows=await gameDb.select('SELECT id FROM playlist WHERE name = ? ORDER BY id LIMIT 1',[LABEL]);
   let id=rows[0]?.id;
@@ -388,6 +407,8 @@ export class SmartFarm {
   if(this.wantLive||this.live||this.starting)return;
   if(!this.consent)throw Error('Review the queue and check the confirmation first.');
   if(!this.plan?.rotation?.length)throw Error('Scan maps before starting the live queue.');
+  if(!this.safetyReady||!canPublishSafePlan(this.plan,this.results))
+   throw Error('Live queue blocked: complete a maximum-fatigue 16-run zero-failure scan first.');
   if(this.character?.local)throw Error('Live server queue requires an online character.');
   this.wantLive=true;this.retries=0;this.managedAck=false;this.awaitingAck=false;
   this.message='Connecting to official game queue…';this.render();
@@ -509,6 +530,10 @@ export class SmartFarm {
  }
  async publish(first=false){
   if(!this.live||!this.socket||this.socket.readyState!==WebSocket.OPEN||!this.plan)return;
+  if(!this.safetyReady||!canPublishSafePlan(this.plan,this.results)){
+   this.stopLive(false);
+   throw Error('Unsafe or outdated fatigue simulation; queue publishing disabled.');
+  }
   const ready=this.plan.rotation;
   // On a prestige threshold, end only the queue owned by this tool.
   if(!ready.length){this.message=this.s.goal==='pp'?'No simulated improvement remains in downloaded ranked maps; PP queue stopped.':'Selected targets are prestige-ready; managed queue stopped.';this.stopLive();return;}
@@ -585,9 +610,10 @@ export class SmartFarm {
     const next=configImport(this.importText,defaults,FARM_SKILLS);
     this.disarmUpgrades('Imported settings. Auto-purchasing remains OFF until you explicitly arm it.');
     if(this.wantLive||this.live||this.starting)this.stopLive(true);
-    this.s=next.settings;this.upgradePolicies=next.upgrades;
+    this.s=next.settings;this.s.fatigueMinutes=WORST_CASE_FATIGUE_MINUTES;
+    this.safetyReady=false;this.upgradePolicies=next.upgrades;
     this.save();this.saveUpgradePolicies();
-    this.exportText='';this.importText='';this.results=[];this.plan=null;this.modPlans=null;this.scannedAt=0;
+    this.exportText='';this.importText='';this.results=[];this.plan=null;this.modPlans=null;this.safetyReady=false;this.scannedAt=0;
     this.message='Imported and saved settings. Scan again for updated recommendations.';
     this.render();return;
    }
@@ -608,7 +634,7 @@ export class SmartFarm {
    '<label>Farming goal<select data-setting="goal">'+[['xp','Skill XP / Prestige'],['pp','PP / Rank improvement']].map(([v,l])=>option(v,l,this.s.goal)).join('')+'</select></label>'+
    '<div class="group">'+(ppMode?'<label>PP priority<select data-setting="ppRank">'+[['gainPerMinute','Weighted PP gain / minute'],['gain','Highest weighted PP gain']].map(([v,l])=>option(v,l,this.s.ppRank)).join('')+'</select></label>'+field('ppMinGain','Minimum weighted PP improvement per map',0.01,100,0.25):select('focus','Primary XP skill',FOCUS)+select('backup','Switch to when physical XP ≤ threshold or prestige-ready',FALLBACK))+
    '<label>Mod strategy<select data-setting="modPreference">'+[['auto','Auto: best whole rotation'],['NM','No Mod only'],['HR','Hard Rock only']].map(([value,label])=>option(value,label,this.s.modPreference)).join('')+'</select></label>'+
-   (!ppMode?field('cutoff','Physical XP cutoff (%)',1,100,1)+field('fatigueMinutes','Strained fatigue minutes (manual)',0,420,1)+field('physicalShare','Physical strain share (%)',0,100,5):field('fatigueMinutes','Strained fatigue minutes (manual)',0,420,1))+field('slots','Queue length',1,50,1)+
+   (!ppMode?field('cutoff','Physical XP cutoff (%)',1,100,1)+'<p class="hint">Safety: simulation fixed at MAXIMUM exhaustion (420 strained min) until new server fatigue pacing can be verified; only 16-run no-fail maps enter live rotations.</p>'+field('physicalShare','Physical strain share (%)',0,100,5):'<p class="hint">Safety: simulation fixed at MAXIMUM exhaustion (420 strained min) until new server fatigue pacing can be verified; only 16-run no-fail maps enter live rotations.</p>')+field('slots','Queue length',1,50,1)+
    field('overheadSec','Transition overhead (seconds)',0,120,1)+(!ppMode?field('minEfficiency','Minimum relative efficiency (%)',1,100,1):'')+
    field('scanInterval','Full rescan interval (minutes)',10,120,5)+'</div>'+
    '<section class="notice"><label class="consent"><input type="checkbox" data-setting="gpuAssist"'+(this.s.gpuAssist?' checked':'')+'> Experimental hybrid CPU + GPU candidate scoring</label>'+

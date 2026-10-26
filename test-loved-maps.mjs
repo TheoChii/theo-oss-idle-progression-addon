@@ -22,7 +22,8 @@ assert.throws(()=>parseMapEligibility({}),/Unexpected beatmap catalog/);
 const oldScores=new Map([[101,125],[201,160],[301,210],[102,88],[999,520]]);
 assert.deepEqual([...filterBestPP(oldScores,c.pp)],[ [101,125],[102,88] ],
  'historical Loved/unranked local scores should not inflate total PP');
-const source=(await readFile('src/smartFarm.js','utf8')).replace(/^import .*;\n/gm,'');
+const safety=(await readFile('src/farm/safety.js','utf8')).replace(/^export /gm,'');
+const source=safety+(await readFile('src/smartFarm.js','utf8')).replace(/^import .*;\n/gm,'');
 const seen={collect:[],runs:[]};
 globalThis.localStorage={getItem:()=>null,setItem(){}};
 globalThis.window={};

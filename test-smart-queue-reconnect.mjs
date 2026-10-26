@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source=(await readFile('src/smartFarm.js','utf8')).replace(/^import .*;\n/gm,'');
+const safety=(await readFile('src/farm/safety.js','utf8')).replace(/^export /gm,'');
+const source=safety+(await readFile('src/smartFarm.js','utf8')).replace(/^import .*;\n/gm,'');
 const sockets=[],sent=[];
 const timers=new Map();let nextTimer=0;
 const oldST=globalThis.setTimeout,oldCT=globalThis.clearTimeout;
@@ -18,7 +19,7 @@ globalThis.WebSocket=class{
 try {
 const mod=await import('data:text/javascript;base64,'+Buffer.from(
 "const FARM_SKILLS=[];const MAX_TIERS=30,MAX_OD=1000000;const makePolicies=()=>({});\n"+source).toString('base64'));
-const instance=()=>{const f=new mod.SmartFarm();f.root={};f.character={id:17,local:false};f.lastCharacterId=17;f.plan={mod:'NM',rotation:[{beatmapId:12,rate:1.5}]};f.consent=true;return f;};
+const instance=()=>{const f=new mod.SmartFarm();f.root={};f.character={id:17,local:false};f.lastCharacterId=17;f.safetyReady=true;f.results=[{beatmapId:12,rate:1.5,mod:'NM',failRate:0,isRefined:true}];f.plan={mod:'NM',rotation:[...f.results]};f.consent=true;return f;};
 const state=(ws,label='Theo Smart Farm (managed)')=>ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label,paused:false,prefs:{mode:'PLAYLIST',mods:[]}}})});
 const character=(ws,id=17)=>ws.onmessage({data:JSON.stringify({type:'character',character:{id}})});
 const first=instance();await first.startLive();const ws=sockets.at(-1);

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const raw=await readFile('src/smartFarm.js','utf8');
 // Isolate the queue transport class without starting the heavy worker.
-const source=raw.replace(/^import .*;\n/gm,'');
+const safety=(await readFile('src/farm/safety.js','utf8')).replace(/^export /gm,'');
+const source=safety+raw.replace(/^import .*;\n/gm,'');
 assert(!source.startsWith('import '));
 const sockets=[];const sent=[];
 globalThis.localStorage={getItem(){return null},setItem(){}};
@@ -19,7 +20,7 @@ try{
  const mod=await import('data:text/javascript;base64,'+Buffer.from('const FARM_SKILLS=[];const MAX_TIERS=30,MAX_OD=1000000;const makePolicies=(keys)=>Object.fromEntries(keys.map(k=>[k,{enabled:false,targets:Array(30).fill(0)}]));\n'+source).toString('base64'));
  const f=new mod.SmartFarm();
  f.root={};f.character={id:12,local:false};f.lastCharacterId=12;
- f.plan={mod:'HR',rotation:[{beatmapId:1,rate:1.5},{beatmapId:2,rate:1}]};
+ f.safetyReady=true;f.results=[{beatmapId:1,rate:1.5,mod:'HR',failRate:0,isRefined:true},{beatmapId:2,rate:1,mod:'HR',failRate:0,isRefined:true}];f.plan={mod:'HR',rotation:[...f.results]};
  await assert.rejects(()=>f.startLive(),/Review the queue and check the confirmation/);
  assert.equal(sockets.length,0,'no queue connection without confirmation');
  // When called directly, the UI requires a confirmation first.
@@ -40,7 +41,7 @@ try{
  assert(sent.some(x=>x.type==='queue:start'));
  // New rankings must replace, not append, the managed queue.
  ws.onmessage({data:JSON.stringify({type:'queue:state',state:{label:'Theo Smart Farm (managed)',paused:false,prefs:{mode:'PLAYLIST',mods:['HR']}}})});
- f.lastChange=0;f.plan={mod:'NM',rotation:[{beatmapId:3,rate:2}]};
+ f.lastChange=0;f.results=[{beatmapId:3,rate:2,mod:'NM',failRate:0,isRefined:true}];f.plan={mod:'NM',rotation:[...f.results]};
  await f.publish();
  assert.deepEqual(sent.filter(x=>x.type==='queue:set').at(-1).entries,[{beatmapId:3,rate:2}]);
  assert(sent.filter(x=>x.type==='queue:start').length>=2,'idle re-queue is rescheduled');
@@ -56,7 +57,7 @@ try{
  assert.deepEqual(sent.filter(x=>x.type==='queue:set').at(-1).entries,[]);
  assert(sent.some(x=>x.type==='queue:prefs'&&x.prefs.mode==='DISABLED'&&JSON.stringify(x.prefs.mods)===JSON.stringify(['SD'])),'restore prior autopilot mode and global mods');
  assert.equal(f.live,false);
- const mismatch=new mod.SmartFarm();mismatch.root={};mismatch.character={id:14,local:false};mismatch.plan={rotation:[{beatmapId:1,rate:1}]};mismatch.consent=true;
+ const mismatch=new mod.SmartFarm();mismatch.root={};mismatch.character={id:14,local:false};mismatch.safetyReady=true;mismatch.results=[{beatmapId:1,rate:1,mod:'NM',failRate:0,isRefined:true}];mismatch.plan={mod:'NM',rotation:[...mismatch.results]};mismatch.consent=true;
  await mismatch.startLive();
  const other=sockets.at(-1);
  other.onmessage({data:JSON.stringify({type:'character',character:{id:15}})});
